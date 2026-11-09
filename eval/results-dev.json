@@ -1,0 +1,116 @@
+{
+  "split" : "dev",
+  "seeds" : [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ],
+  "forecasts" : 792,
+  "paths" : 400,
+  "alertProbability" : 0.5,
+  "dispersion" : 1.6,
+  "horizons" : [ {
+    "days" : 7,
+    "n" : 792,
+    "maeRunway" : 31729.07,
+    "maeFlat" : 62884.34,
+    "maeRepeat" : 73507.34,
+    "medianAeRunway" : 18279.66,
+    "biasRunway" : 598.01,
+    "relativeMaeRunway" : 0.11412320961316706,
+    "relativeMaeFlat" : 0.22532470467001103,
+    "relativeMaeRepeat" : 0.25911698423527557,
+    "coverage" : 0.8838383838383839,
+    "maeRunwayExFinancing" : 26425.47,
+    "maeFlatExFinancing" : 59603.59,
+    "maeRepeatExFinancing" : 68782.14,
+    "biasRunwayExFinancing" : -2517.82,
+    "coverageExFinancing" : 0.9078282828282829
+  }, {
+    "days" : 30,
+    "n" : 792,
+    "maeRunway" : 58670.60,
+    "maeFlat" : 93826.77,
+    "maeRepeat" : 142624.47,
+    "medianAeRunway" : 31118.56,
+    "biasRunway" : 8013.96,
+    "relativeMaeRunway" : 0.2057864822286219,
+    "relativeMaeFlat" : 0.327146587040972,
+    "relativeMaeRepeat" : 0.4997763026959344,
+    "coverage" : 0.8055555555555556,
+    "maeRunwayExFinancing" : 38310.69,
+    "maeFlatExFinancing" : 80720.27,
+    "maeRepeatExFinancing" : 123278.59,
+    "biasRunwayExFinancing" : -5593.25,
+    "coverageExFinancing" : 0.9002525252525253
+  }, {
+    "days" : 90,
+    "n" : 792,
+    "maeRunway" : 107196.29,
+    "maeFlat" : 137279.68,
+    "maeRepeat" : 325299.25,
+    "medianAeRunway" : 79963.06,
+    "biasRunway" : 23393.46,
+    "relativeMaeRunway" : 0.37940384727760074,
+    "relativeMaeFlat" : 0.48457649910517814,
+    "relativeMaeRepeat" : 1.1531953104465609,
+    "coverage" : 0.7752525252525253,
+    "maeRunwayExFinancing" : 76370.50,
+    "maeFlatExFinancing" : 137606.69,
+    "maeRepeatExFinancing" : 301858.45,
+    "biasRunwayExFinancing" : -18747.61,
+    "coverageExFinancing" : 0.8813131313131313
+  } ],
+  "shortfalls" : {
+    "minimum" : {
+      "eligible" : 748,
+      "realShortfalls" : 100,
+      "warnedRunway" : 95,
+      "alertsRunway" : 163,
+      "falseAlarmsRunway" : 42,
+      "recallRunway" : 0.95,
+      "falseAlarmShareRunway" : 0.25766871165644173,
+      "warnedRepeat" : 52,
+      "alertsRepeat" : 192,
+      "falseAlarmsRepeat" : 120,
+      "recallRepeat" : 0.52,
+      "falseAlarmShareRepeat" : 0.625,
+      "medianLeadDaysWarned" : 34
+    },
+    "zero" : {
+      "eligible" : 784,
+      "realShortfalls" : 73,
+      "warnedRunway" : 67,
+      "alertsRunway" : 116,
+      "falseAlarmsRunway" : 34,
+      "recallRunway" : 0.9178082191780822,
+      "falseAlarmShareRunway" : 0.29310344827586204,
+      "warnedRepeat" : 40,
+      "alertsRepeat" : 168,
+      "falseAlarmsRepeat" : 115,
+      "recallRepeat" : 0.547945205479452,
+      "falseAlarmShareRepeat" : 0.6845238095238095,
+      "medianLeadDaysWarned" : 43
+    }
+  },
+  "byArchetype" : {
+    "CONSULTANCY" : {
+      "runway" : 43197.67,
+      "flat" : 73132.36,
+      "repeat" : 116041.54
+    },
+    "AGENCY" : {
+      "runway" : 79409.11,
+      "flat" : 135842.61,
+      "repeat" : 209037.59
+    },
+    "RETAIL" : {
+      "runway" : 31451.25,
+      "flat" : 51046.94,
+      "repeat" : 83544.05
+    },
+    "CONTRACTOR" : {
+      "runway" : 80624.38,
+      "flat" : 115285.16,
+      "repeat" : 161874.72
+    }
+  },
+  "gitCommit" : "8d4267a",
+  "seconds" : 19.5
+}
