@@ -73,7 +73,9 @@ public final class BacktestCli {
                 ReportBuilder.confidence(results, BOOTSTRAP_ROUNDS, 7L),
                 ReportBuilder.byArchetype(results),
                 git("rev-parse", "--short", "HEAD"),
-                !git("status", "--porcelain", "--untracked-files=no").isEmpty(),
+                // Tracked source changes only: the results files this command writes don't count.
+                !git("status", "--porcelain", "--untracked-files=no", "--", ":(top)", ":(top,exclude)eval")
+                        .isEmpty(),
                 Math.round(seconds * 10) / 10.0);
     }
 
