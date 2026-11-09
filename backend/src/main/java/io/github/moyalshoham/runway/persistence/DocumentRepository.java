@@ -59,6 +59,13 @@ public class DocumentRepository {
         return new Upserted(created, updated);
     }
 
+    public long count(long companyId) {
+        return jdbc.sql("select count(*) from document where company_id = ?")
+                .param(companyId)
+                .query(Long.class)
+                .single();
+    }
+
     public List<Document> findAll(long companyId) {
         return jdbc.sql("select type, number, counterparty, issue_date, due_date, amount, paid_date from document "
                         + "where company_id = ? order by issue_date, id")

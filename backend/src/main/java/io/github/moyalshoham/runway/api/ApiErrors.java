@@ -1,7 +1,9 @@
 package io.github.moyalshoham.runway.api;
 
 import io.github.moyalshoham.runway.importer.CsvRejectedException;
+import io.github.moyalshoham.runway.service.BusyException;
 import io.github.moyalshoham.runway.service.NotFoundException;
+import io.github.moyalshoham.runway.service.TooManyRequestsException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,22 @@ public class ApiErrors extends ResponseEntityExceptionHandler {
                         .map(r -> Map.of("line", r.line(), "message", r.message()))
                         .toList());
         return p;
+    }
+
+    @ExceptionHandler(BusyException.class)
+    ProblemDetail busy(BusyException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+    }
+
+    @ExceptionHandler(TooManyRequestsException.class)
+    ProblemDetail tooMany(TooManyRequestsException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, e.getMessage());
+    }
+
+    /** JDK parsing errors carry raw input in their message; answer generically. */
+    @ExceptionHandler(NumberFormatException.class)
+    ProblemDetail badNumber(NumberFormatException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Invalid number");
     }
 
     /** Domain validation (records, scenario fields, asOf range) and bean validation on parameters. */

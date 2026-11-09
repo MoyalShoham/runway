@@ -35,8 +35,20 @@ public class DemoService {
         this.clock = clock;
     }
 
+    /** Generating a demo writes about 2,500 rows; one every few seconds is plenty. */
+    static final long MIN_INTERVAL_MILLIS = 3_000;
+
+    private long lastCreated;
+
     @Transactional
     public CompanyRow create(long seed) {
+        synchronized (this) {
+            long now = clock.millis();
+            if (now - lastCreated < MIN_INTERVAL_MILLIS) {
+                throw new TooManyRequestsException("A demo company was just created; wait a few seconds");
+            }
+            lastCreated = now;
+        }
         LocalDate today = LocalDate.now(clock);
         SyntheticCompany c = generator.generate(seed, today.minusYears(3).plusDays(1), 3);
         long id = companies.insert(c.name() + " (demo)", c.openingBalance(), c.openingDate(), c.minimumBalance());

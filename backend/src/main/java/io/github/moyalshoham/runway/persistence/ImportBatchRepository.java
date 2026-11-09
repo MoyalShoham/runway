@@ -12,10 +12,11 @@ public class ImportBatchRepository {
         this.jdbc = jdbc;
     }
 
-    public void record(long companyId, String kind, String filename, int read, int imported, int skipped) {
-        jdbc.sql("insert into import_batch (company_id, kind, filename, rows_read, rows_imported, rows_skipped) "
-                        + "values (?, ?, ?, ?, ?, ?)")
-                .params(companyId, kind, filename, read, imported, skipped)
+    public void record(long companyId, String kind, String filename, int read, int imported, int skipped, int updated) {
+        jdbc.sql(
+                        "insert into import_batch (company_id, kind, filename, rows_read, rows_imported, rows_skipped, rows_updated) "
+                                + "values (?, ?, ?, ?, ?, ?, ?)")
+                .params(companyId, kind, filename, read, imported, skipped, updated)
                 .update();
     }
 }

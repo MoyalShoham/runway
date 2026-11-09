@@ -15,15 +15,24 @@ final class Values {
     static final LocalDate MAX_DATE = LocalDate.of(2100, 12, 31);
     static final BigDecimal MAX_AMOUNT = new BigDecimal("1000000000000");
 
-    /** ISO first; otherwise day-first, as Israeli exports are. */
+    /** ISO first; otherwise day-first, as Israeli exports are, with four- or two-digit years. */
     private static final List<DateTimeFormatter> DATES = List.of(
             DateTimeFormatter.ISO_LOCAL_DATE,
             DateTimeFormatter.ofPattern("d/M/uuuu").withResolverStyle(ResolverStyle.STRICT),
             DateTimeFormatter.ofPattern("d.M.uuuu").withResolverStyle(ResolverStyle.STRICT),
-            DateTimeFormatter.ofPattern("d-M-uuuu").withResolverStyle(ResolverStyle.STRICT));
+            DateTimeFormatter.ofPattern("d-M-uuuu").withResolverStyle(ResolverStyle.STRICT),
+            DateTimeFormatter.ofPattern("d/M/uu").withResolverStyle(ResolverStyle.STRICT),
+            DateTimeFormatter.ofPattern("d.M.uu").withResolverStyle(ResolverStyle.STRICT));
 
-    /** Digits with optional comma thousands separators and up to two decimals. */
-    private static final Pattern NUMBER = Pattern.compile("^(\\d{1,3}(,\\d{3})+|\\d+)(\\.\\d{1,2})?$");
+    /**
+     * Up to 13 integer digits (under one trillion), optional comma thousands separators, up to two
+     * decimals. The digit bound matters: BigDecimal parsing is quadratic in the number of digits, so
+     * an unbounded pattern let a single huge field pin a CPU.
+     */
+    private static final Pattern NUMBER = Pattern.compile("^(\\d{1,3}(,\\d{3}){1,4}|\\d{1,13})(\\.\\d{1,2})?$");
+
+    static final int MAX_DATE_LENGTH = 20;
+    static final int MAX_AMOUNT_LENGTH = 40;
 
     private static final Pattern CURRENCY = Pattern.compile("(₪|ILS|NIS|ש\"ח|ש״ח)", Pattern.CASE_INSENSITIVE);
 
@@ -33,6 +42,9 @@ final class Values {
         String s = raw.strip();
         if (s.isEmpty()) {
             throw new IllegalArgumentException(field + " is empty");
+        }
+        if (s.length() > MAX_DATE_LENGTH) {
+            throw new IllegalArgumentException(field + " is not a date: " + truncate(s));
         }
         for (DateTimeFormatter f : DATES) {
             try {
@@ -45,7 +57,8 @@ final class Values {
                 // try the next format
             }
         }
-        throw new IllegalArgumentException(field + " is not a date (use YYYY-MM-DD or DD/MM/YYYY): " + truncate(s));
+        throw new IllegalArgumentException(
+                field + " is not a date (use YYYY-MM-DD, DD/MM/YYYY or DD/MM/YY): " + truncate(s));
     }
 
     /**
@@ -53,6 +66,9 @@ final class Values {
      * More than two decimals is an error, not something to round silently.
      */
     static BigDecimal amount(String raw, String field) {
+        if (raw.length() > MAX_AMOUNT_LENGTH) {
+            throw new IllegalArgumentException(field + " is not an amount: " + truncate(raw));
+        }
         String s = CURRENCY.matcher(raw)
                 .replaceAll("")
                 .replace(" ", "")
@@ -98,6 +114,23 @@ final class Values {
             }
         }
         return s;
+    }
+
+    /** Empty, a dash, or zero: the unused side of a debit/credit pair. */
+    static boolean blankOrZero(String raw) {
+        String s = raw.strip();
+        if (s.isEmpty() || s.equals("-")) {
+            return true;
+        }
+        try {
+            return amount(s, "value").signum() == 0;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    static String truncate200(String s) {
+        return s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
 
     static String truncate(String s) {

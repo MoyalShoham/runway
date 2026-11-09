@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -28,6 +29,16 @@ class ApiEndToEndTest extends PostgresTestBase {
 
     @Autowired
     private TestRestTemplate http;
+
+    @BeforeEach
+    void sendTheClientHeaderLikeTheUiDoes() {
+        if (http.getRestTemplate().getInterceptors().isEmpty()) {
+            http.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+                request.getHeaders().add(CsrfHeaderFilter.HEADER, "test");
+                return execution.execute(request, body);
+            });
+        }
+    }
 
     private long createCompany(SyntheticCompany c) {
         ResponseEntity<JsonNode> r = http.postForEntity(
@@ -212,5 +223,82 @@ class ApiEndToEndTest extends PostgresTestBase {
         assertThat(r.getBody().get("transactions").asInt()).isGreaterThan(1000);
         assertThat(LocalDate.parse(r.getBody().get("lastTransactionDate").asText()))
                 .isAfter(LocalDate.now().minusDays(7));
+        // Demo seeding is throttled.
+        assertThat(http.postForEntity("/api/demo?seed=4", null, JsonNode.class).getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    void writesWithoutTheClientHeaderAreRefused() {
+        TestRestTemplate bare = new TestRestTemplate();
+        String root = http.getRootUri();
+        ResponseEntity<String> r = bare.postForEntity(root + "/api/companies", Map.of("name", "x"), String.class);
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(bare.getForEntity(root + "/api/companies", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void scenariosMustNameARealCustomerAndAPlausibleDate() {
+        SyntheticCompany c = new CompanyGenerator().generate(5);
+        LocalDate asOf = LocalDate.of(2025, 6, 30);
+        long id = createCompany(c);
+        upload(
+                "/api/companies/" + id + "/transactions/import",
+                "bank.csv",
+                CsvExport.transactions(c, asOf).getBytes(StandardCharsets.UTF_8));
+        upload(
+                "/api/companies/" + id + "/invoices/import",
+                "inv.csv",
+                CsvExport.documents(c, DocumentType.INVOICE, asOf).getBytes(StandardCharsets.UTF_8));
+        String customer = http.getForObject("/api/companies/" + id + "/forecast", JsonNode.class)
+                .get("customers")
+                .get(0)
+                .asText();
+
+        ResponseEntity<JsonNode> unknown = http.postForEntity(
+                "/api/companies/" + id + "/scenarios",
+                Map.of(
+                        "scenarios",
+                        new Object[] {Map.of("type", "CUSTOMER_PAYS_LATE", "customer", "Nobody Ltd", "extraDays", 30)}),
+                JsonNode.class);
+        assertThat(unknown.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(unknown.getBody().get("detail").asText()).contains("Unknown customer");
+
+        ResponseEntity<JsonNode> known = http.postForEntity(
+                "/api/companies/" + id + "/scenarios",
+                Map.of(
+                        "scenarios",
+                        new Object[] {Map.of("type", "CUSTOMER_PAYS_LATE", "customer", customer, "extraDays", 30)}),
+                JsonNode.class);
+        assertThat(known.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<JsonNode> ancient = http.postForEntity(
+                "/api/companies/" + id + "/scenarios",
+                Map.of("scenarios", new Object[] {Map.of("type", "NEW_HIRE", "date", "0001-01-01", "amount", "10000")}),
+                JsonNode.class);
+        assertThat(ancient.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void malformedQuotingAndImpossibleOpeningDatesAreClientErrors() {
+        long id = createCompany(new CompanyGenerator().generate(10));
+        byte[] csv = "date,amount,description\n2023-02-01,-10.00,\"abc\"def\n".getBytes(StandardCharsets.UTF_8);
+
+        assertThat(upload("/api/companies/" + id + "/transactions/import", "x.csv", csv)
+                        .getStatusCode())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        ResponseEntity<JsonNode> farFuture = http.postForEntity(
+                "/api/companies",
+                Map.of("name", "x", "openingBalance", "0", "openingDate", "+999999999-12-31", "minimumBalance", "0"),
+                JsonNode.class);
+        assertThat(farFuture.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        ResponseEntity<JsonNode> blank = http.exchange(
+                "/api/companies/" + id,
+                org.springframework.http.HttpMethod.PATCH,
+                new HttpEntity<>(Map.of("name", "   ")),
+                JsonNode.class);
+        assertThat(blank.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }

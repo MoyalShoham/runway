@@ -13,9 +13,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class AppConfig {
 
+    /** "Today" is Israel's today, whatever the container's time zone. */
     @Bean
     Clock clock() {
-        return Clock.systemDefaultZone();
+        return Clock.system(java.time.ZoneId.of("Asia/Jerusalem"));
     }
 
     /**

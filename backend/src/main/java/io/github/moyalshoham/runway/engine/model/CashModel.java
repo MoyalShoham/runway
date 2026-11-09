@@ -35,6 +35,7 @@ public record CashModel(
         List<Document> openInvoices,
         List<Document> openBills,
         List<Document> doubtfulInvoices,
+        List<String> customers,
         Diagnostics diagnostics) {
 
     /** A recurring series of invoices (a retainer) or bills (the accountant's monthly fee). */
@@ -165,6 +166,7 @@ public record CashModel(
                 openInvoices,
                 openBills,
                 doubtful,
+                customers(s.documents(), detections),
                 new Diagnostics(
                         txs.size(),
                         settled.size(),
@@ -172,6 +174,28 @@ public record CashModel(
                         discretionary.size(),
                         recurring.size(),
                         residual.size()));
+    }
+
+    /** Names a scenario can refer to: invoice counterparties and the payers of recurring income. */
+    private static List<String> customers(List<Document> documents, List<RecurringDetector.Detection> detections) {
+        java.util.TreeMap<String, String> byKey = new java.util.TreeMap<>();
+        for (Document d : documents) {
+            if (d.type() == DocumentType.INVOICE) {
+                byKey.putIfAbsent(Counterparties.key(d.counterparty()), d.counterparty());
+            }
+        }
+        for (RecurringDetector.Detection d : detections) {
+            if (d.pattern().sign() > 0) {
+                byKey.putIfAbsent(d.pattern().counterpartyKey(), d.pattern().label());
+            }
+        }
+        return byKey.values().stream().sorted().toList();
+    }
+
+    /** True if {@code name} refers to one of {@link #customers()}. */
+    public boolean isCustomer(String name) {
+        String key = Counterparties.key(name);
+        return customers.stream().anyMatch(c -> Counterparties.key(c).equals(key));
     }
 
     public DelayModel delays(DocumentType type) {

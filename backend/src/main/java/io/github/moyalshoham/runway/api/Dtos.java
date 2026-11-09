@@ -13,6 +13,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -30,7 +31,8 @@ public final class Dtos {
             @NotNull @Digits(integer = 13, fraction = 2) BigDecimal minimumBalance) {}
 
     public record CompanyUpdate(
-            @Size(min = 1, max = 200) String name, @Digits(integer = 13, fraction = 2) BigDecimal minimumBalance) {}
+            @Size(min = 1, max = 200) @Pattern(regexp = ".*\\S.*", message = "must not be blank") String name,
+            @Digits(integer = 13, fraction = 2) BigDecimal minimumBalance) {}
 
     public record CompanyResponse(
             long id,
@@ -150,6 +152,7 @@ public final class Dtos {
             List<RecurringDto> recurring,
             List<RecurringDocumentDto> recurringDocuments,
             List<DoubtfulDto> doubtfulInvoices,
+            List<String> customers,
             CashModel.Diagnostics diagnostics) {
 
         static final int MAX_SCHEDULE = 200;
@@ -182,6 +185,7 @@ public final class Dtos {
                     f.doubtfulInvoices().stream()
                             .map(ForecastResponse::doubtful)
                             .toList(),
+                    f.customers(),
                     f.diagnostics());
         }
 

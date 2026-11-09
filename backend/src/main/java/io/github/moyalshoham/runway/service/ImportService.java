@@ -24,7 +24,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ImportService {
 
-    /** Outcome of an import. {@code skipped} are duplicates (transactions) or updates (documents). */
+    /**
+     * Per-company limits. A small business has a few thousand transactions a year; the limits keep a
+     * single company from making every forecast slow for everyone.
+     */
+    public static final int MAX_TRANSACTIONS_PER_COMPANY = 200_000;
+
+    public static final int MAX_DOCUMENTS_PER_COMPANY = 20_000;
+
+    /** Outcome of an import. {@code skipped} are duplicate transactions; {@code updated} are re-imported documents. */
     public record Result(int rowsRead, int imported, int skipped, int updated, List<RowError> rejected) {}
 
     private final CompanyService companies;
@@ -59,8 +67,12 @@ public class ImportService {
         }
         int read = parsed.rows().size() + parsed.errors().size();
         rejectIfNeeded(errors, skipInvalid);
+        if (transactions.count(companyId) + valid.size() > MAX_TRANSACTIONS_PER_COMPANY) {
+            throw new CsvRejectedException(
+                    "A company can hold at most " + MAX_TRANSACTIONS_PER_COMPANY + " transactions");
+        }
         int inserted = transactions.insertIgnoringDuplicates(companyId, valid);
-        batches.record(companyId, "TRANSACTIONS", safeName(filename), read, inserted, valid.size() - inserted);
+        batches.record(companyId, "TRANSACTIONS", safeName(filename), read, inserted, valid.size() - inserted, 0);
         return new Result(read, inserted, valid.size() - inserted, 0, errors);
     }
 
@@ -71,9 +83,13 @@ public class ImportService {
         Parsed<Document> parsed = CsvParser.documents(content, type);
         int read = parsed.rows().size() + parsed.errors().size();
         rejectIfNeeded(parsed.errors(), skipInvalid);
+        if (documents.count(companyId) + parsed.rows().size() > MAX_DOCUMENTS_PER_COMPANY) {
+            throw new CsvRejectedException(
+                    "A company can hold at most " + MAX_DOCUMENTS_PER_COMPANY + " invoices and bills");
+        }
         DocumentRepository.Upserted result = documents.upsert(
                 companyId, parsed.rows().stream().map(Parsed.Line::value).toList());
-        batches.record(companyId, type.name(), safeName(filename), read, result.created(), result.updated());
+        batches.record(companyId, type.name(), safeName(filename), read, result.created(), 0, result.updated());
         return new Result(read, result.created(), 0, result.updated(), parsed.errors());
     }
 

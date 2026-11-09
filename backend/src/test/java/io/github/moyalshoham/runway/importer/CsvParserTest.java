@@ -156,4 +156,74 @@ class CsvParserTest {
         assertThat(p.rows()).singleElement().satisfies(l -> assertThat(l.value().description())
                 .isEqualTo("coffee, black"));
     }
+
+    @Test
+    void aHebrewExportWithBookingAndValueDatesUsesTheBookingDate() {
+        String csv =
+                """
+                תאריך,תאריך ערך,תיאור,חובה,זכות
+                01/11/26,03/11/26,העברה,0.00,"5,900.00"
+                02/11/26,02/11/26,שכירות,"8,000.00",0
+                """;
+        Parsed<BankTransaction> p = CsvParser.transactions(csv.getBytes(Charset.forName("windows-1255")));
+
+        assertThat(p.errors()).isEmpty();
+        assertThat(p.rows())
+                .extracting(l -> l.value().date())
+                .containsExactly(LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 2));
+        assertThat(p.rows()).extracting(l -> l.value().amount().toPlainString()).containsExactly("5900.00", "-8000.00");
+    }
+
+    @Test
+    void readsUtf16WithAByteOrderMark() {
+        byte[] bytes = "date,amount,description\n2025-01-01,-5,קפה\n".getBytes(StandardCharsets.UTF_16);
+
+        assertThat(CsvParser.transactions(bytes).rows())
+                .singleElement()
+                .satisfies(l -> assertThat(l.value().description()).isEqualTo("קפה"));
+    }
+
+    @Test
+    void badQuotingIsARejectionNotACrash() {
+        assertThatThrownBy(
+                        () -> CsvParser.transactions(utf8("date,amount,description\n2025-01-01,-10.00,\"abc\"def\n")))
+                .isInstanceOf(CsvRejectedException.class)
+                .hasMessageContaining("Malformed CSV")
+                .hasMessageContaining("line");
+        assertThatThrownBy(() ->
+                        CsvParser.transactions(utf8("date,amount,description\n2025-01-01,-10.00,\"unterminated\n")))
+                .isInstanceOf(CsvRejectedException.class);
+    }
+
+    @Test
+    void hugeNumbersAreRejectedQuickly() {
+        String nines = "9".repeat(1_000_000);
+        long started = System.nanoTime();
+        Parsed<BankTransaction> p =
+                CsvParser.transactions(utf8("date,amount,description\n2025-01-01," + nines + ",x\n"));
+
+        assertThat((System.nanoTime() - started) / 1e9).isLessThan(2.0);
+        assertThat(p.errors()).singleElement().satisfies(e -> assertThat(e.message())
+                .contains("not an amount"));
+        assertThat(CsvParser.transactions(utf8("date,amount,description\n2025-01-01,99999999999999,x\n"))
+                        .errors())
+                .hasSize(1);
+        assertThat(CsvParser.transactions(utf8("date,amount,description\n2025-01-01,\"999,999,999,999.99\",x\n"))
+                        .rows())
+                .hasSize(1);
+    }
+
+    @Test
+    void aPaymentBeforeTheInvoiceDateIsRejected() {
+        Parsed<Document> p = CsvParser.documents(
+                utf8(
+                        """
+                number,customer,issue_date,due_date,amount,paid_date
+                INV-1,Acme,2025-03-01,2025-03-31,100,2020-01-01
+                """),
+                DocumentType.INVOICE);
+
+        assertThat(p.errors()).singleElement().satisfies(e -> assertThat(e.message())
+                .contains("before issue_date"));
+    }
 }

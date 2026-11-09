@@ -33,21 +33,64 @@ public class ForecastService {
     private final CompanyService companies;
     private final TransactionRepository transactions;
     private final DocumentRepository documents;
-    private final Forecaster forecaster = new Forecaster();
+    /** Scenario dates must fall within a year either side of asOf. */
+    static final int SCENARIO_DATE_WINDOW_DAYS = 366;
 
-    public ForecastService(CompanyService companies, TransactionRepository transactions, DocumentRepository documents) {
+    private final Forecaster forecaster = new Forecaster();
+    private final SimulationLimiter limiter;
+
+    public ForecastService(
+            CompanyService companies,
+            TransactionRepository transactions,
+            DocumentRepository documents,
+            SimulationLimiter limiter) {
         this.companies = companies;
         this.transactions = transactions;
         this.documents = documents;
+        this.limiter = limiter;
     }
 
     public Forecast forecast(long companyId, LocalDate asOf, Integer horizonDays) {
-        return forecaster.forecast(model(companyId, asOf, horizonDays), List.of());
+        return limiter.run(() -> forecaster.forecast(model(companyId, asOf, horizonDays), List.of()));
     }
 
     public Comparison compare(long companyId, LocalDate asOf, Integer horizonDays, List<Scenario> scenarios) {
-        CashModel model = model(companyId, asOf, horizonDays);
-        return new Comparison(forecaster.forecast(model, List.of()), forecaster.forecast(model, scenarios));
+        return limiter.run(() -> {
+            CashModel model = model(companyId, asOf, horizonDays);
+            validate(model, scenarios);
+            return new Comparison(forecaster.forecast(model, List.of()), forecaster.forecast(model, scenarios));
+        });
+    }
+
+    /**
+     * Rejects scenarios that would silently do nothing (an unknown customer) or that make no sense
+     * (dates decades away from the data).
+     */
+    static void validate(CashModel model, List<Scenario> scenarios) {
+        LocalDate asOf = model.snapshot().asOf();
+        for (Scenario s : scenarios) {
+            switch (s) {
+                case Scenario.CustomerPaysLate late -> requireCustomer(model, late.customer());
+                case Scenario.LoseCustomer lose -> {
+                    requireCustomer(model, lose.customer());
+                    requireDate(asOf, lose.from());
+                }
+                case Scenario.NewHire hire -> requireDate(asOf, hire.startDate());
+                case Scenario.OneOff oneOff -> requireDate(asOf, oneOff.date());
+            }
+        }
+    }
+
+    private static void requireCustomer(CashModel model, String name) {
+        if (!model.isCustomer(name)) {
+            throw new IllegalArgumentException("Unknown customer: " + name.strip());
+        }
+    }
+
+    private static void requireDate(LocalDate asOf, LocalDate date) {
+        if (Math.abs(ChronoUnit.DAYS.between(asOf, date)) > SCENARIO_DATE_WINDOW_DAYS) {
+            throw new IllegalArgumentException("Scenario dates must be within a year of " + asOf + "; got " + date);
+        }
     }
 
     /** Actual daily balances for the {@code days} days up to asOf. */
@@ -100,8 +143,7 @@ public class ForecastService {
         }
         if (asOf.isBefore(c.openingDate()) || asOf.isAfter(latest)) {
             throw new IllegalArgumentException("asOf must be between " + c.openingDate() + " and " + latest
-                    + " (the last imported transaction); got " + asOf + ", "
-                    + ChronoUnit.DAYS.between(latest, asOf) + " days after the data");
+                    + " (the last imported transaction); got " + asOf);
         }
         return asOf;
     }

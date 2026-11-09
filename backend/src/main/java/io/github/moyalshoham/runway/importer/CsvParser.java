@@ -39,7 +39,9 @@ public final class CsvParser {
     private static final Charset WINDOWS_1255 = Charset.forName("windows-1255");
 
     private static final Map<String, List<String>> TX_COLUMNS = Map.of(
-            "date", List.of("date", "booking_date", "booking date", "value_date", "תאריך", "תאריך ערך"),
+            // Listed by priority: when a file has both a booking date and a value date, the booking
+            // date wins (it is the date the bank statement and balance use).
+            "date", List.of("date", "booking_date", "booking date", "תאריך", "value_date", "תאריך ערך"),
             "amount", List.of("amount", "סכום"),
             "debit", List.of("debit", "withdrawal", "חובה"),
             "credit", List.of("credit", "deposit", "זכות"),
@@ -77,10 +79,14 @@ public final class CsvParser {
                 if (single) {
                     amount = Values.amount(t.get(r, "amount"), "amount");
                 } else {
-                    String debit = t.get(r, "debit").strip();
-                    String credit = t.get(r, "credit").strip();
+                    String debit = Values.blankOrZero(t.get(r, "debit"))
+                            ? ""
+                            : t.get(r, "debit").strip();
+                    String credit = Values.blankOrZero(t.get(r, "credit"))
+                            ? ""
+                            : t.get(r, "credit").strip();
                     if (debit.isEmpty() == credit.isEmpty()) {
-                        throw new IllegalArgumentException("exactly one of debit and credit must be filled");
+                        throw new IllegalArgumentException("exactly one of debit and credit must be non-zero");
                     }
                     amount = debit.isEmpty()
                             ? Values.amount(credit, "credit").abs()
@@ -132,6 +138,10 @@ public final class CsvParser {
                 }
                 String paidRaw = t.get(r, "paid_date").strip();
                 LocalDate paid = paidRaw.isEmpty() ? null : Values.date(paidRaw, "paid_date");
+                if (paid != null && paid.isBefore(issued)) {
+                    throw new IllegalArgumentException(
+                            "paid_date is before issue_date (prepayments are not supported)");
+                }
                 rows.add(new Parsed.Line<>(line, new Document(type, number, party, issued, due, amount, paid)));
             } catch (IllegalArgumentException e) {
                 addError(errors, line, e.getMessage());
@@ -190,23 +200,36 @@ public final class CsvParser {
             return new Table(columns, all.subList(1, all.size()), lines.subList(1, lines.size()));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        } catch (UncheckedIOException e) {
+            // commons-csv reports bad quoting this way while iterating, with the line number.
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new CsvRejectedException("Malformed CSV: " + Values.truncate200(String.valueOf(cause.getMessage())));
         } catch (IllegalStateException | IllegalArgumentException e) {
-            throw new CsvRejectedException("Malformed CSV: " + e.getMessage());
+            throw new CsvRejectedException("Malformed CSV: " + Values.truncate200(String.valueOf(e.getMessage())));
         }
     }
 
+    /**
+     * Maps header names to logical columns. When several headers map to the same column (a bank
+     * export with both a booking date and a value date), the alias listed first wins.
+     */
     private static Map<String, Integer> mapHeader(CSVRecord header, Map<String, List<String>> aliases) {
-        Map<String, String> lookup = new HashMap<>();
-        aliases.forEach((column, names) -> names.forEach(n -> lookup.put(n, column)));
         Map<String, Integer> columns = new HashMap<>();
+        Map<String, Integer> rank = new HashMap<>();
         for (int i = 0; i < header.size(); i++) {
             String name = header.get(i).strip().toLowerCase(Locale.ROOT).replace('״', '"');
-            String column = lookup.get(name);
-            if (column == null) {
-                continue;
-            }
-            if (columns.putIfAbsent(column, i) != null) {
-                throw new CsvRejectedException("Two columns map to " + column);
+            for (Map.Entry<String, List<String>> e : aliases.entrySet()) {
+                int priority = e.getValue().indexOf(name);
+                if (priority < 0) {
+                    continue;
+                }
+                Integer current = rank.get(e.getKey());
+                if (current == null || priority < current) {
+                    columns.put(e.getKey(), i);
+                    rank.put(e.getKey(), priority);
+                } else if (priority == current) {
+                    throw new CsvRejectedException("Two columns are both called " + name);
+                }
             }
         }
         return columns;
@@ -222,8 +245,29 @@ public final class CsvParser {
         return semicolons > commas ? ';' : ',';
     }
 
-    /** Strict UTF-8 (BOM stripped), falling back to Windows-1255; NUL bytes mean binary, refused. */
+    /**
+     * UTF-16 when it starts with a byte-order mark (Excel's "Unicode text"); otherwise strict UTF-8
+     * (BOM stripped), falling back to Windows-1255. NUL bytes in an 8-bit file mean binary, refused.
+     */
     static String decode(byte[] content) {
+        if (content.length >= 2
+                && ((content[0] == (byte) 0xFF && content[1] == (byte) 0xFE)
+                        || (content[0] == (byte) 0xFE && content[1] == (byte) 0xFF))) {
+            try {
+                String text = StandardCharsets.UTF_16
+                        .newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(content))
+                        .toString();
+                if (text.indexOf('\0') >= 0) {
+                    throw new CsvRejectedException("This looks like a binary file, not CSV");
+                }
+                return text.startsWith("\uFEFF") ? text.substring(1) : text;
+            } catch (CharacterCodingException e) {
+                throw new CsvRejectedException("The file is not valid UTF-16 text");
+            }
+        }
         for (byte b : content) {
             if (b == 0) {
                 throw new CsvRejectedException("This looks like a binary file, not CSV");

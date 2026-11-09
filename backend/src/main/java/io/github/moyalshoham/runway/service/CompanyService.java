@@ -18,8 +18,14 @@ public class CompanyService {
         this.companies = companies;
     }
 
+    static final LocalDate MIN_OPENING = LocalDate.of(1990, 1, 1);
+    static final LocalDate MAX_OPENING = LocalDate.of(2100, 12, 31);
+
     @Transactional
     public CompanyRow create(String name, BigDecimal openingBalance, LocalDate openingDate, BigDecimal minimumBalance) {
+        if (openingDate.isBefore(MIN_OPENING) || openingDate.isAfter(MAX_OPENING)) {
+            throw new IllegalArgumentException("openingDate must be between " + MIN_OPENING + " and " + MAX_OPENING);
+        }
         long id = companies.insert(name.strip(), Money.round(openingBalance), openingDate, Money.round(minimumBalance));
         return get(id);
     }
@@ -35,6 +41,9 @@ public class CompanyService {
     @Transactional
     public CompanyRow update(long id, String name, BigDecimal minimumBalance) {
         CompanyRow c = get(id);
+        if (name != null && name.isBlank()) {
+            throw new IllegalArgumentException("name must not be blank");
+        }
         companies.update(
                 id,
                 name == null ? c.name() : name.strip(),

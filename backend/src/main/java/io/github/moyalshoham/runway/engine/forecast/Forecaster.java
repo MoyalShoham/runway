@@ -105,6 +105,7 @@ public final class Forecaster {
                 model.transactionPatterns(),
                 model.documentPatterns(),
                 model.doubtfulInvoices(),
+                model.customers(),
                 model.diagnostics());
     }
 

@@ -29,6 +29,7 @@ public record Forecast(
         List<RecurringPattern> recurring,
         List<CashModel.RecurringDocuments> recurringDocuments,
         List<Document> doubtfulInvoices,
+        List<String> customers,
         CashModel.Diagnostics diagnostics) {
 
     public Forecast {
@@ -39,6 +40,7 @@ public record Forecast(
         recurring = List.copyOf(recurring);
         recurringDocuments = List.copyOf(recurringDocuments);
         doubtfulInvoices = List.copyOf(doubtfulInvoices);
+        customers = List.copyOf(customers);
     }
 
     /** Median balance {@code h} days after asOf (1-based). */
