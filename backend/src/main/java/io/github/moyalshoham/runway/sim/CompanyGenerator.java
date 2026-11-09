@@ -5,6 +5,7 @@ import io.github.moyalshoham.runway.engine.domain.BusinessCalendar;
 import io.github.moyalshoham.runway.engine.domain.Document;
 import io.github.moyalshoham.runway.engine.domain.DocumentType;
 import io.github.moyalshoham.runway.engine.domain.Money;
+import io.github.moyalshoham.runway.engine.model.VatSettings;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.DayOfWeek;
@@ -20,7 +21,8 @@ import java.util.Map;
 import java.util.SplittableRandom;
 
 /**
- * Generates a synthetic Israeli small business (ILS, 18% VAT) with a full bank history and its
+ * Generates a synthetic Israeli small business (ILS; VAT at the rate in force on each date, 17% until
+ * the end of 2024 and 18% from 2025) with a full bank history and its
  * invoices and bills.
  *
  * <p>The generator is deliberately richer than the forecaster's model, so the backtest is not a
@@ -32,12 +34,11 @@ import java.util.SplittableRandom;
 public final class CompanyGenerator {
 
     public static final LocalDate EVAL_START = LocalDate.of(2023, 1, 1);
+    private static final VatSettings ISRAEL_VAT = VatSettings.israel();
     /** Counterparty of owner loans, injected when the overdraft gets deep (a reaction to a shortfall). */
     public static final String OWNER_LOAN = "הלוואת בעלים";
     /** Counterparty of dividends, taken when cash piles up. */
     public static final String OWNER_DIVIDEND = "דיבידנד לבעלים";
-
-    static final BigDecimal VAT = new BigDecimal("0.18");
 
     public SyntheticCompany generate(long seed) {
         return generate(seed, EVAL_START, 3);
@@ -71,7 +72,11 @@ public final class CompanyGenerator {
     /** Hidden payment behaviour of a customer: mean and spread of days late. */
     private record Payer(double meanDelay, double sdDelay, double defaultRate) {}
 
-    private record Customer(String name, Terms terms, Payer payer, double weight) {}
+    /**
+     * @param withholding share of the net amount the customer withholds at source and remits to the
+     *     tax authority (ניכוי במקור); the bank receives the invoice total minus that
+     */
+    private record Customer(String name, Terms terms, Payer payer, double weight, double withholding) {}
 
     private record Employee(String name, double gross, double netRatio, LocalDate from, LocalDate to) {}
 
@@ -154,8 +159,6 @@ public final class CompanyGenerator {
         /** Net revenue by bimonthly period start, for income-tax advances. */
         final Map<LocalDate, BigDecimal> revenueByPeriod = new HashMap<>();
 
-        int invoiceNo = 1000;
-        int billNo = 1;
         double growth;
         double revenue0;
 
@@ -203,7 +206,7 @@ public final class CompanyGenerator {
                     .filter(t -> !t.date().isBefore(start) && !t.date().isAfter(end))
                     .sorted(Comparator.comparing(BankTransaction::date))
                     .toList();
-            List<Document> known = docs.stream()
+            List<Document> known = numberChronologically(docs).stream()
                     .filter(d -> !d.issueDate().isAfter(end))
                     .map(d -> d.asKnownOn(end))
                     .toList();
@@ -312,7 +315,7 @@ public final class CompanyGenerator {
                 if (m.getMonth() == anniversary && m.isAfter(YearMonth.from(start))) {
                     current = round100(current * (1 + increase));
                 }
-                add(day(m, rentDay), -current, landlord, "הוראת קבע שכירות", -vatOf(current));
+                addWithVat(day(m, rentDay), -current, landlord, "הוראת קבע שכירות");
             }
             double arnona = round100(rent * uniform(0.25, 0.45));
             double electricity = rent * (archetype == Archetype.RETAIL ? uniform(0.25, 0.4) : uniform(0.06, 0.12));
@@ -330,10 +333,10 @@ public final class CompanyGenerator {
                                 default -> 1.0;
                             };
                     double bill = 2 * electricity * season * lognormal(1.0, 0.08);
-                    add(day(m, iecDay), -bill, "חברת החשמל", "חברת החשמל לישראל - חשבון תקופתי", -vatOf(bill));
+                    addWithVat(day(m, iecDay), -bill, "חברת החשמל", "חברת החשמל לישראל - חשבון תקופתי");
                     if (archetype == Archetype.RETAIL) {
                         double water = 2 * rent * 0.02 * lognormal(1.0, 0.1);
-                        add(day(m, iecDay + 3), -water, "מי אביבים", "מים וביוב", -vatOf(water));
+                        addWithVat(day(m, iecDay + 3), -water, "מי אביבים", "מים וביוב");
                     }
                 }
             }
@@ -368,7 +371,7 @@ public final class CompanyGenerator {
                     if (foreign) {
                         a *= lognormal(1.0, 0.025); // USD billing, ILS exchange rate moves
                     }
-                    add(d, -a, s[0], s[0] + (foreign ? " (חיוב במט\"ח)" : ""), foreign ? 0 : -vatOf(a));
+                    add(d, -a, s[0], s[0] + (foreign ? " (חיוב במט\"ח)" : ""), foreign ? 0 : -vatOf(a, d));
                 }
                 total += amount;
             }
@@ -410,7 +413,7 @@ public final class CompanyGenerator {
             double accountant = round100(uniform(1500, 4000));
             for (YearMonth m = YearMonth.from(start); !m.isAfter(YearMonth.from(end)); m = m.plusMonths(1)) {
                 LocalDate issued = BusinessCalendar.nextBusinessDay(m.atDay(1));
-                bill("רו\"ח כהן ושות'", issued, issued.plusDays(14), accountant * 1.18, 0);
+                bill("רו\"ח כהן ושות'", issued, issued.plusDays(14), accountant * (1 + vatRate(issued)), 0);
             }
             total += accountant * 1.18;
             return total;
@@ -457,8 +460,16 @@ public final class CompanyGenerator {
                                 : r < 0.75
                                         ? new Payer(10, 7, 0.005)
                                         : r < 0.92 ? new Payer(30, 15, 0.015) : new Payer(55, 25, 0.03);
+                // About a third of business customers withhold tax at source on payments for services.
+                double withholding = archetype != Archetype.RETAIL && rng.nextDouble() < 0.35
+                        ? new double[] {0.02, 0.05, 0.2}[rng.nextInt(3)]
+                        : 0.0;
                 list.add(new Customer(
-                        CUSTOMER_NAMES[(offset + i) % CUSTOMER_NAMES.length], terms, payer, 1.0 / (i + 1)));
+                        CUSTOMER_NAMES[(offset + i) % CUSTOMER_NAMES.length],
+                        terms,
+                        payer,
+                        1.0 / (i + 1),
+                        withholding));
             }
             return list;
         }
@@ -564,7 +575,7 @@ public final class CompanyGenerator {
                 LocalDate issued =
                         BusinessCalendar.nextBusinessDay(projectStart.plusDays(rng.nextInt(0, 25) + 30L * i));
                 Terms terms = rng.nextBoolean() ? Terms.NET_30 : Terms.EOM_30;
-                bill(vendor, issued, terms.due(issued), net / parts * 1.18, rng.nextInt(-2, 4));
+                bill(vendor, issued, terms.due(issued), net / parts * (1 + vatRate(issued)), rng.nextInt(-2, 4));
             }
         }
 
@@ -585,7 +596,7 @@ public final class CompanyGenerator {
                 }
                 double gross = revenue0
                         * share
-                        * 1.18
+                        * (1 + vatRate(d))
                         * 12
                         / 52
                         * w
@@ -593,8 +604,8 @@ public final class CompanyGenerator {
                         * seasonal(d)
                         * trend(d)
                         * lognormal(1.0, 0.18);
-                addVat(d, vatOf(gross));
-                addRevenue(d, gross / 1.18);
+                addVat(d, vatOf(gross, d));
+                addRevenue(d, gross / (1 + vatRate(d)));
                 LocalDate settle = BusinessCalendar.nextBusinessDay(d.plusDays(2));
                 for (int a = 0; a < acquirers.length; a++) {
                     add(
@@ -605,7 +616,7 @@ public final class CompanyGenerator {
                             0,
                             false);
                 }
-                weekSales.merge((int) (ChronoUnit.DAYS.between(start, d) / 7), gross / 1.18, Double::sum);
+                weekSales.merge((int) (ChronoUnit.DAYS.between(start, d) / 7), gross / (1 + vatRate(d)), Double::sum);
             }
             weekSales.forEach((week, net) -> {
                 LocalDate weekEnd = start.plusDays(week * 7L + 6);
@@ -616,7 +627,7 @@ public final class CompanyGenerator {
                     }
                     double billNet = net * cogsShare / supplierCount * lognormal(1.0, 0.12);
                     Terms terms = s % 2 == 0 ? Terms.EOM_30 : Terms.NET_30;
-                    bill(suppliers[s], issued, terms.due(issued), billNet * 1.18, rng.nextInt(-1, 3));
+                    bill(suppliers[s], issued, terms.due(issued), billNet * (1 + vatRate(issued)), rng.nextInt(-1, 3));
                 }
             });
         }
@@ -650,11 +661,16 @@ public final class CompanyGenerator {
                 for (int i = 0; i < n; i++) {
                     double amount = Math.min(8000, lognormal(180, 1.0));
                     String merchant = MERCHANTS[rng.nextInt(MERCHANTS.length)];
-                    add(d, -amount, merchant, "כרטיס אשראי " + merchant, rng.nextDouble() < 0.75 ? -vatOf(amount) : 0);
+                    add(
+                            d,
+                            -amount,
+                            merchant,
+                            "כרטיס אשראי " + merchant,
+                            rng.nextDouble() < 0.75 ? -vatOf(amount, d) : 0);
                 }
                 if (rng.nextDouble() < 2.0 / 365) {
                     double equipment = lognormal(12000, 0.6);
-                    add(d, -equipment, "KSP", "רכישת ציוד", -vatOf(equipment));
+                    addWithVat(d, -equipment, "KSP", "רכישת ציוד");
                 }
             }
             for (int y = start.getYear(); y <= end.getYear(); y++) {
@@ -740,10 +756,10 @@ public final class CompanyGenerator {
             if (issued.isAfter(end.plusDays(120))) {
                 return;
             }
-            double gross = net * 1.18;
+            double gross = net * (1 + vatRate(issued));
             BigDecimal amount = money(gross);
             LocalDate due = c.terms().due(issued);
-            addVat(issued, vatOf(gross));
+            addVat(issued, vatOf(gross, issued));
             addRevenue(issued, net);
             LocalDate paid = null;
             if (rng.nextDouble() >= c.payer().defaultRate()) {
@@ -753,18 +769,35 @@ public final class CompanyGenerator {
                 }
                 LocalDate p = due.plusDays(Math.round(delay));
                 paid = BusinessCalendar.nextBusinessDay(p.isBefore(issued) ? issued : p);
-                add(paid, amount, c.name(), "העברה מ" + c.name());
+                BigDecimal received = c.withholding() > 0 ? amount.subtract(money(net * c.withholding())) : amount;
+                add(paid, received, c.name(), "העברה מ" + c.name());
             }
-            docs.add(new Document(DocumentType.INVOICE, "INV-" + invoiceNo++, c.name(), issued, due, amount, paid));
+            docs.add(new Document(DocumentType.INVOICE, "draft", c.name(), issued, due, amount, paid));
         }
 
         void bill(String vendor, LocalDate issued, LocalDate due, double gross, int delayDays) {
             BigDecimal amount = money(gross);
-            addVat(issued, -vatOf(gross));
+            addVat(issued, -vatOf(gross, issued));
             LocalDate p = due.plusDays(delayDays);
             LocalDate paid = BusinessCalendar.nextBusinessDay(p.isBefore(issued) ? issued : p);
             add(paid, amount.negate(), vendor, "תשלום לספק " + vendor);
-            docs.add(new Document(DocumentType.BILL, "B-" + billNo++, vendor, issued, due, amount, paid));
+            docs.add(new Document(DocumentType.BILL, "draft", vendor, issued, due, amount, paid));
+        }
+
+        /** Documents are created stream by stream; number them in issue order, as an accounting system would. */
+        static List<Document> numberChronologically(List<Document> docs) {
+            List<Document> sorted = docs.stream()
+                    .sorted(Comparator.comparing(Document::issueDate))
+                    .toList();
+            List<Document> numbered = new ArrayList<>(sorted.size());
+            int invoice = 1000;
+            int bill = 1;
+            for (Document d : sorted) {
+                String number = d.type() == DocumentType.INVOICE ? "INV-" + invoice++ : "B-" + bill++;
+                numbered.add(new Document(
+                        d.type(), number, d.counterparty(), d.issueDate(), d.dueDate(), d.amount(), d.paidDate()));
+            }
+            return numbered;
         }
 
         // ---- helpers -----------------------------------------------------------------------
@@ -782,7 +815,7 @@ public final class CompanyGenerator {
                 if (d.isBefore(from) || d.isAfter(to)) {
                     continue;
                 }
-                add(d, -amount, party, description, vat ? -vatOf(amount) : 0);
+                add(d, -amount, party, description, vat ? -vatOf(amount, d) : 0);
             }
         }
 
@@ -820,8 +853,19 @@ public final class CompanyGenerator {
             return LocalDate.of(date.getYear(), month, 1);
         }
 
-        static double vatOf(double gross) {
-            return gross * 0.18 / 1.18;
+        /** VAT inside a VAT-inclusive amount, at the rate in force on {@code date}. */
+        static double vatOf(double gross, LocalDate date) {
+            double r = vatRate(date);
+            return gross * r / (1 + r);
+        }
+
+        static double vatRate(LocalDate date) {
+            return ISRAEL_VAT.rateOn(date).doubleValue();
+        }
+
+        /** An outflow that carries input VAT (rent, utilities, purchases). */
+        void addWithVat(LocalDate date, double amount, String party, String description) {
+            add(date, amount, party, description, -vatOf(Math.abs(amount), date));
         }
 
         double seasonal(LocalDate d) {
