@@ -57,7 +57,7 @@ class DelayModelTest {
         // 11 / (11 + 3) of draws come from the customer's own 40-day delays, the rest from the
         // pooled delays (half 40, half 0): 0.786 * 40 + 0.214 * 20 = 35.7.
         assertThat(meanSample(m, "slow", -30)).isBetween(34.5, 37.0);
-        assertThat(m.meanDelay("slow")).isBetween(35.6, 35.8);
+        assertThat(m.typicalDelay("slow")).isEqualTo(40);
     }
 
     @Test
@@ -71,23 +71,45 @@ class DelayModelTest {
     }
 
     @Test
-    void anInvoiceAlreadyOverdueIsPaidAfterToday() {
+    void anInvoiceOverdueLongerThanAnyPaymentOnRecordIsNotExpected() {
         DelayModel m = DelayModel.fit(history("acme", 10, 11), DocumentType.INVOICE, AS_OF, 3);
 
         SplittableRandom rng = new SplittableRandom(3);
-        for (int i = 0; i < 500; i++) {
-            // 45 days overdue is longer than any delay on record: the tail takes over.
-            assertThat(m.sample("acme", 45, rng)).isGreaterThan(45);
+        assertThat(m.sample("acme", 45, rng)).isEqualTo(DelayModel.NOT_PAID);
+        // 5 days overdue: still within the history, so paid after today.
+        for (int i = 0; i < 200; i++) {
+            assertThat(m.sample("acme", 5, rng)).isBetween(6, 12);
         }
     }
 
     @Test
-    void paymentsAfterAsOfAreNotUsed() {
+    void openInvoicesAreCensoredObservationsNotIgnored() {
+        // Five invoices paid 10 days late, five still open 50 days after their due date.
+        List<Document> docs = new ArrayList<>(history("acme", 10, 5));
+        for (int i = 0; i < 5; i++) {
+            LocalDate due = AS_OF.minusDays(50);
+            docs.add(invoice("open-" + i, "acme", due.minusDays(30).toString(), due.toString(), "1000", null));
+        }
+        DelayModel m = DelayModel.fit(docs, DocumentType.INVOICE, AS_OF, 3);
+
+        // Learning from paid invoices only would say "always 10 days late". Kaplan-Meier keeps the
+        // open half: about half of fresh invoices are not paid within any delay seen so far.
+        SplittableRandom rng = new SplittableRandom(5);
+        long notPaid = IntStream.range(0, 4000)
+                .filter(i -> m.sample("acme", -30, rng) == DelayModel.NOT_PAID)
+                .count();
+        assertThat(notPaid / 4000.0).isBetween(0.45, 0.55);
+    }
+
+    @Test
+    void paymentsAfterAsOfAreNotSeen() {
         List<Document> docs = history("acme", 60, 11);
         DelayModel m = DelayModel.fit(docs, DocumentType.INVOICE, LocalDate.parse("2025-03-15"), 3);
 
-        // Only the invoice due 1 Jan (paid 2 Mar) was paid by 15 Mar.
-        assertThat(m.observations("acme")).isEqualTo(1);
+        // Issued by 15 Mar: invoices due 1 Jan..1 Apr. Only the first (paid 2 Mar) is a payment; the
+        // other three are open on 15 Mar, so they count as censored, not as paid after 60 days.
+        assertThat(m.observations("acme")).isEqualTo(4);
+        assertThat(m.sample("acme", -30, new SplittableRandom(1))).isBetween(58, 62);
     }
 
     @Test

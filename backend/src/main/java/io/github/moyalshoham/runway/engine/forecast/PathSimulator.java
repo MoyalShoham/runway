@@ -7,6 +7,7 @@ import io.github.moyalshoham.runway.engine.domain.DocumentType;
 import io.github.moyalshoham.runway.engine.domain.Money;
 import io.github.moyalshoham.runway.engine.model.AdHocDocumentModel;
 import io.github.moyalshoham.runway.engine.model.CashModel;
+import io.github.moyalshoham.runway.engine.model.DelayModel;
 import io.github.moyalshoham.runway.engine.model.VatModel;
 import io.github.moyalshoham.runway.engine.recurring.RecurringPattern;
 import io.github.moyalshoham.runway.engine.scenario.Scenario;
@@ -74,6 +75,9 @@ final class PathSimulator {
             String party = Counterparties.key(d.counterparty());
             int overdue = (int) ChronoUnit.DAYS.between(d.dueDate(), asOf);
             int delay = model.delays(d.type()).sample(party, overdue, rng);
+            if (delay == DelayModel.NOT_PAID) {
+                continue;
+            }
             LocalDate paid = d.dueDate().plusDays(delay + lateDays(d.type(), party));
             String label =
                     (d.type() == DocumentType.INVOICE ? "Invoice " : "Bill ") + d.number() + " · " + d.counterparty();
@@ -134,6 +138,9 @@ final class PathSimulator {
                 BigDecimal amount = sampleAmount(p, rng);
                 simulatedVat.merge(vat.periodOf(issued).start(), vat.signedVat(rd.type(), amount), BigDecimal::add);
                 LocalDate paid = paymentDate(rd.type(), party, issued, rd.termDays(), rng);
+                if (paid == null) {
+                    continue;
+                }
                 Component c = rd.type() == DocumentType.INVOICE ? Component.FUTURE_INVOICES : Component.FUTURE_BILLS;
                 BigDecimal signed = rd.type() == DocumentType.INVOICE ? amount : amount.negate();
                 acc.add(
@@ -162,6 +169,9 @@ final class PathSimulator {
                     model.vat().signedVat(type, t.amount()),
                     BigDecimal::add);
             LocalDate paid = paymentDate(type, t.counterpartyKey(), doc.issueDate(), t.termDays(), rng);
+            if (paid == null) {
+                continue;
+            }
             YearMonth month = YearMonth.from(paid);
             BigDecimal signed =
                     type == DocumentType.INVOICE ? t.amount() : t.amount().negate();
@@ -251,12 +261,18 @@ final class PathSimulator {
         return Money.times(p.amount(), Math.max(0.0, 1.0 + deviation));
     }
 
-    /** Payment date of a document issued in the future: issue + terms + sampled delay, never before issue. */
+    /**
+     * Payment date of a document issued in the future: issue + terms + sampled delay, never before
+     * issue; null when the draw says it is not paid at all.
+     */
     private LocalDate paymentDate(
             DocumentType type, String party, LocalDate issued, int termDays, SplittableRandom rng) {
         LocalDate due = issued.plusDays(termDays);
         int overdue = (int) ChronoUnit.DAYS.between(due, asOf);
         int delay = model.delays(type).sample(party, overdue, rng);
+        if (delay == DelayModel.NOT_PAID) {
+            return null;
+        }
         LocalDate paid = due.plusDays(delay + lateDays(type, party));
         if (paid.isBefore(issued)) {
             paid = issued;

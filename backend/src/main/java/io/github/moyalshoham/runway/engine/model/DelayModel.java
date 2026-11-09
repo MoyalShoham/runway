@@ -6,106 +6,185 @@ import io.github.moyalshoham.runway.engine.domain.DocumentType;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 
 /**
- * Empirical distribution of payment delay (paid date minus due date, in days) per counterparty,
- * shrunk toward the distribution over all counterparties.
+ * Distribution of payment delay (paid date minus due date, in days) per counterparty, estimated with
+ * Kaplan-Meier and shrunk toward the distribution over all counterparties.
  *
- * <p>Sampling draws from the counterparty's own delays with probability n / (n + k), where n is its
- * number of paid documents and k is the prior strength, otherwise from the pooled delays. A new
- * customer therefore behaves like the average customer, and one with a long record like itself.
+ * <p>Why Kaplan-Meier: an invoice that is still open on asOf is information too ("its delay is more
+ * than its current days overdue"). Learning only from paid invoices keeps the fast payers and drops
+ * the slow ones, which makes every forecast optimistic. Open documents enter the estimate as
+ * right-censored observations.
  *
- * <p>Samples are conditioned on what is already known: an invoice that is 20 days overdue today has a
- * delay of more than 20 days, so only such delays are drawn (right-censoring). When the history has
- * no delay that long, the excess is drawn from an exponential tail.
+ * <p>Sampling draws from the counterparty's own curve with probability n / (n + k), n being its number
+ * of observations and k the prior strength, otherwise from the pooled curve. Draws are conditioned on
+ * what is known: an invoice 20 days overdue today has a delay of more than 20 days. Probability mass
+ * past the longest observed payment means "not paid within any delay seen so far"; such draws return
+ * {@link #NOT_PAID}.
  */
 public final class DelayModel {
 
-    static final int LOOKBACK_DAYS = 730;
-    static final int MAX_REJECTION_TRIES = 64;
-    static final double TAIL_MEAN_DAYS = 21.0;
+    /** Returned by {@link #sample} when the draw falls beyond every delay seen in the history. */
+    public static final int NOT_PAID = Integer.MAX_VALUE;
 
-    private final Map<String, int[]> byCounterparty;
-    private final int[] pooled;
+    static final int LOOKBACK_DAYS = 730;
+
+    private final Map<String, Curve> byCounterparty;
+    private final Curve pooled;
     private final double priorStrength;
 
-    private DelayModel(Map<String, int[]> byCounterparty, int[] pooled, double priorStrength) {
+    private DelayModel(Map<String, Curve> byCounterparty, Curve pooled, double priorStrength) {
         this.byCounterparty = byCounterparty;
         this.pooled = pooled;
         this.priorStrength = priorStrength;
     }
 
-    /** Fits on documents of {@code type} paid on or before {@code asOf}, within the lookback window. */
+    /**
+     * Fits on documents of {@code type} due within the lookback window. Paid documents (paid on or
+     * before asOf) are events; open documents are censored at asOf.
+     */
     public static DelayModel fit(List<Document> documents, DocumentType type, LocalDate asOf, double priorStrength) {
-        Map<String, List<Integer>> lists = new HashMap<>();
-        List<Integer> all = new ArrayList<>();
+        Map<String, List<int[]>> lists = new HashMap<>();
+        List<int[]> all = new ArrayList<>();
         LocalDate from = asOf.minusDays(LOOKBACK_DAYS);
         for (Document d : documents) {
-            if (d.type() != type
-                    || d.paidDate() == null
-                    || d.paidDate().isAfter(asOf)
-                    || d.paidDate().isBefore(from)) {
+            if (d.type() != type || d.dueDate().isBefore(from) || d.issueDate().isAfter(asOf)) {
                 continue;
             }
-            int delay = (int) ChronoUnit.DAYS.between(d.dueDate(), d.paidDate());
+            boolean paid = d.paidDate() != null && !d.paidDate().isAfter(asOf);
+            LocalDate end = paid ? d.paidDate() : asOf;
+            int[] obs = {(int) ChronoUnit.DAYS.between(d.dueDate(), end), paid ? 1 : 0};
             lists.computeIfAbsent(Counterparties.key(d.counterparty()), k -> new ArrayList<>())
-                    .add(delay);
-            all.add(delay);
+                    .add(obs);
+            all.add(obs);
         }
-        Map<String, int[]> byCounterparty = new HashMap<>();
-        lists.forEach((k, v) -> byCounterparty.put(k, toSortedArray(v)));
-        return new DelayModel(byCounterparty, toSortedArray(all), priorStrength);
+        Map<String, Curve> byCounterparty = new HashMap<>();
+        lists.forEach((k, v) -> byCounterparty.put(k, Curve.of(v)));
+        return new DelayModel(byCounterparty, Curve.of(all), priorStrength);
     }
 
-    /** Number of paid documents on record for this counterparty. */
+    /** Number of documents (paid or open) on record for this counterparty. */
     public int observations(String counterpartyKey) {
-        int[] own = byCounterparty.get(counterpartyKey);
-        return own == null ? 0 : own.length;
+        Curve own = byCounterparty.get(counterpartyKey);
+        return own == null ? 0 : own.observations;
     }
 
     /**
-     * Draws a delay in days. The result is greater than {@code daysOverdue}, i.e. the payment lands
-     * after asOf. {@code daysOverdue} is asOf minus the due date, negative when not yet due.
+     * Draws a delay in days, greater than {@code daysOverdue} (the payment lands after asOf), or
+     * {@link #NOT_PAID}. {@code daysOverdue} is asOf minus the due date, negative when not yet due.
      */
     public int sample(String counterpartyKey, int daysOverdue, SplittableRandom rng) {
-        int[] own = byCounterparty.getOrDefault(counterpartyKey, new int[0]);
-        if (own.length == 0 && pooled.length == 0) {
+        Curve own = byCounterparty.get(counterpartyKey);
+        int n = own == null ? 0 : own.observations;
+        Curve curve = n > 0 && rng.nextDouble() < n / (n + priorStrength) ? own : pooled;
+        if (curve.isEmpty()) {
+            curve = own != null && !own.isEmpty() ? own : null;
+        }
+        if (curve == null) {
             return Math.max(0, daysOverdue + 1);
         }
-        double ownWeight = own.length / (own.length + priorStrength);
-        for (int i = 0; i < MAX_REJECTION_TRIES; i++) {
-            int[] source = own.length > 0 && rng.nextDouble() < ownWeight ? own : pooled;
-            if (source.length == 0) {
-                source = own;
-            }
-            int delay = source[rng.nextInt(source.length)] + rng.nextInt(-2, 3);
-            if (delay > daysOverdue) {
-                return delay;
-            }
+        int delay = curve.sampleAfter(daysOverdue, rng);
+        if (delay == NOT_PAID) {
+            return NOT_PAID;
         }
-        double excess = -TAIL_MEAN_DAYS * Math.log(1.0 - rng.nextDouble());
-        return daysOverdue + 1 + (int) Math.floor(excess);
+        delay += rng.nextInt(-2, 3);
+        return Math.max(delay, daysOverdue + 1);
     }
 
-    /** Average delay for display: the mixture mean of the counterparty's and the pooled delays. */
-    public double meanDelay(String counterpartyKey) {
-        int[] own = byCounterparty.getOrDefault(counterpartyKey, new int[0]);
-        double pooledMean = Arrays.stream(pooled).average().orElse(0);
-        if (own.length == 0) {
-            return pooledMean;
-        }
-        double ownWeight = own.length / (own.length + priorStrength);
-        return ownWeight * Arrays.stream(own).average().orElse(0) + (1 - ownWeight) * pooledMean;
+    /** Median delay of the pooled curve, for display; 0 without history. */
+    public int typicalDelay(String counterpartyKey) {
+        Curve own = byCounterparty.get(counterpartyKey);
+        Curve c = own != null && own.observations >= priorStrength ? own : pooled;
+        return c.isEmpty() ? 0 : c.quantile(0.5);
     }
 
-    private static int[] toSortedArray(List<Integer> values) {
-        int[] a = values.stream().mapToInt(Integer::intValue).toArray();
-        Arrays.sort(a);
-        return a;
+    /**
+     * Kaplan-Meier estimate as a step function: {@code times[i]} is the i-th distinct event time and
+     * {@code cdf[i]} the probability of being paid by then. {@code cdf} stays below 1 when the longest
+     * observations are censored.
+     */
+    static final class Curve {
+        final int[] times;
+        final double[] cdf;
+        final int observations;
+
+        private Curve(int[] times, double[] cdf, int observations) {
+            this.times = times;
+            this.cdf = cdf;
+            this.observations = observations;
+        }
+
+        static Curve of(List<int[]> observations) {
+            List<int[]> sorted = new ArrayList<>(observations);
+            // Events before censorings at the same time, the usual Kaplan-Meier convention.
+            sorted.sort((a, b) -> a[0] != b[0] ? Integer.compare(a[0], b[0]) : Integer.compare(b[1], a[1]));
+            List<Integer> times = new ArrayList<>();
+            List<Double> cdf = new ArrayList<>();
+            int atRisk = sorted.size();
+            double survival = 1.0;
+            int i = 0;
+            while (i < sorted.size()) {
+                int t = sorted.get(i)[0];
+                int events = 0;
+                int leaving = 0;
+                while (i < sorted.size() && sorted.get(i)[0] == t) {
+                    events += sorted.get(i)[1];
+                    leaving++;
+                    i++;
+                }
+                if (events > 0) {
+                    survival *= 1.0 - events / (double) atRisk;
+                    times.add(t);
+                    cdf.add(1.0 - survival);
+                }
+                atRisk -= leaving;
+            }
+            return new Curve(
+                    times.stream().mapToInt(Integer::intValue).toArray(),
+                    cdf.stream().mapToDouble(Double::doubleValue).toArray(),
+                    observations.size());
+        }
+
+        boolean isEmpty() {
+            return times.length == 0;
+        }
+
+        /** Probability of being paid by day {@code t}. */
+        double cdfAt(int t) {
+            double p = 0;
+            for (int i = 0; i < times.length && times[i] <= t; i++) {
+                p = cdf[i];
+            }
+            return p;
+        }
+
+        /** Draw from the curve conditioned on delay > {@code after}. */
+        int sampleAfter(int after, SplittableRandom rng) {
+            double base = cdfAt(after);
+            double remaining = 1.0 - base;
+            if (remaining <= 1e-12) {
+                return NOT_PAID;
+            }
+            double target = base + rng.nextDouble() * remaining;
+            for (int i = 0; i < times.length; i++) {
+                if (times[i] > after && cdf[i] >= target) {
+                    return times[i];
+                }
+            }
+            return NOT_PAID;
+        }
+
+        int quantile(double q) {
+            for (int i = 0; i < times.length; i++) {
+                if (cdf[i] >= q) {
+                    return times[i];
+                }
+            }
+            return times[times.length - 1];
+        }
     }
 }
