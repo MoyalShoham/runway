@@ -10,7 +10,7 @@ public final class Counterparties {
     private static final Pattern QUOTES = Pattern.compile("[\"'`׳״‘’“”]");
     private static final Pattern LONG_NUMBERS = Pattern.compile("\\d{3,}");
     private static final Pattern NON_WORD = Pattern.compile("[^\\p{L}\\p{N}]+");
-    private static final Pattern LEGAL_SUFFIX = Pattern.compile("\\b(ltd|inc|llc|בעמ)\\b");
+    private static final Pattern LEGAL_SUFFIX = Pattern.compile("(?U)\\b(ltd|inc|llc|בעמ)\\b");
 
     private Counterparties() {}
 

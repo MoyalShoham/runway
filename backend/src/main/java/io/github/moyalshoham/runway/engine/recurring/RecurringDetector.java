@@ -201,31 +201,35 @@ public final class RecurringDetector {
         return deviations;
     }
 
+    /**
+     * The most recent step change in amount: the last occurrences share one level (within 1%), the up
+     * to three before them share another, and the two differ by at least 1.5%.
+     */
     static AmountChange amountChange(List<Occurrence> occ) {
-        if (occ.size() < 6) {
+        int n = occ.size();
+        if (n < 4) {
             return null;
         }
-        List<BigDecimal> recent = lastAmounts(occ, 3);
-        List<BigDecimal> before = occ.subList(occ.size() - 6, occ.size() - 3).stream()
+        BigDecimal level = occ.getLast().amount();
+        int start = n - 1;
+        while (start > 0 && tight(List.of(occ.get(start - 1).amount()), level)) {
+            start--;
+        }
+        if (start == 0 || n - start < 2) {
+            return null;
+        }
+        List<BigDecimal> before = occ.subList(Math.max(0, start - 3), start).stream()
                 .map(Occurrence::amount)
                 .toList();
-        BigDecimal newLevel = Money.median(recent);
         BigDecimal oldLevel = Money.median(before);
-        if (oldLevel.signum() == 0 || !tight(recent, newLevel) || !tight(before, oldLevel)) {
+        if (before.size() < 2 || oldLevel.signum() == 0 || !tight(before, oldLevel)) {
             return null;
         }
-        double change = newLevel.divide(oldLevel, MathContext.DECIMAL64).doubleValue() - 1.0;
+        double change = level.divide(oldLevel, MathContext.DECIMAL64).doubleValue() - 1.0;
         if (Math.abs(change) < 0.015) {
             return null;
         }
-        LocalDate since = occ.get(occ.size() - 3).date();
-        for (int i = occ.size() - 3; i < occ.size(); i++) {
-            if (occ.get(i).amount().compareTo(newLevel) == 0) {
-                since = occ.get(i).date();
-                break;
-            }
-        }
-        return new AmountChange(oldLevel, newLevel, since);
+        return new AmountChange(oldLevel, level, occ.get(start).date());
     }
 
     private static boolean tight(List<BigDecimal> values, BigDecimal level) {
