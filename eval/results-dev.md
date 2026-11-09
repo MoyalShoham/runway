@@ -1,29 +1,49 @@
-Split `dev`: 24 companies, 792 forecasts, 400 paths, alert probability 0.50, dispersion 1.60, commit `8d4267a`.
+Split `dev`: 24 companies, 792 forecasts, 400 paths, alert probability 0.50, dispersion 1.60, commit `34a8192`.
 
 | Horizon | runway MAE (ILS) | Flat MAE | Last-30-days MAE | runway median AE | runway bias | runway MAE / monthly outflow | 10-90% band coverage |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 7 days | 31,729 | 62,884 | 73,507 | 18,280 | 598 | 11.4% | 88% |
-| 30 days | 58,671 | 93,827 | 142,624 | 31,119 | 8,014 | 20.6% | 81% |
-| 90 days | 107,196 | 137,280 | 325,299 | 79,963 | 23,393 | 37.9% | 78% |
+| 7 days | 30,152 | 63,311 | 75,620 | 15,258 | -3,208 | 10.9% | 90% |
+| 30 days | 56,687 | 88,481 | 137,141 | 29,567 | 8,393 | 20.6% | 83% |
+| 90 days | 114,526 | 143,535 | 336,874 | 84,526 | 22,081 | 41.2% | 77% |
 
 Excluding owner loans and dividends made after the cutoff (owner reactions no forecast can know):
 
 | Horizon | runway MAE (ILS) | Flat MAE | Last-30-days MAE | runway bias | 10-90% band coverage |
 |---|---:|---:|---:|---:|---:|
-| 7 days | 26,425 | 59,604 | 68,782 | -2,518 | 91% |
-| 30 days | 38,311 | 80,720 | 123,279 | -5,593 | 90% |
-| 90 days | 76,371 | 137,607 | 301,858 | -18,748 | 88% |
+| 7 days | 25,047 | 59,448 | 69,922 | -5,038 | 92% |
+| 30 days | 36,602 | 75,468 | 120,383 | -245 | 91% |
+| 90 days | 77,443 | 139,378 | 309,077 | -3,331 | 89% |
 
-| Threshold | Real shortfalls | runway warned | runway false-alarm share | Last-30-days warned | Last-30-days false-alarm share | Median lead (days) |
-|---|---:|---:|---:|---:|---:|---:|
-| minimum | 100 of 748 | 95% (95) | 26% (42 of 163) | 52% (52) | 63% (120 of 192) | 34 |
-| zero | 73 of 784 | 92% (67) | 29% (34 of 116) | 55% (40) | 68% (115 of 168) | 43 |
+Shortfalls below minimum: 43 events (distinct company and first day below), seen at 139 of 744 eligible cutoffs.
+
+| Method | Events warned at the first chance | Events warned at some cutoff | Median lead of first warning (days) | Cutoff-level recall | False-alarm share of alerts |
+|---|---:|---:|---:|---:|---:|
+| runway | 88% (38) | 98% (42) | 34 | 87% (121 of 139) | 35% (77 of 221) |
+| lastThirtyDays | 51% (22) | 79% (34) | 34 | 47% (65 of 139) | 60% (119 of 200) |
+| cushion | 88% (38) | 98% (42) | 30 | 78% (109 of 139) | 66% (260 of 392) |
+
+Shortfalls below zero: 23 events (distinct company and first day below), seen at 85 of 778 eligible cutoffs.
+
+| Method | Events warned at the first chance | Events warned at some cutoff | Median lead of first warning (days) | Cutoff-level recall | False-alarm share of alerts |
+|---|---:|---:|---:|---:|---:|
+| runway | 83% (19) | 96% (22) | 78 | 88% (75 of 85) | 39% (54 of 138) |
+| lastThirtyDays | 48% (11) | 87% (20) | 52 | 52% (44 of 85) | 70% (123 of 175) |
+| cushion | 78% (18) | 96% (22) | 76 | 80% (68 of 85) | 77% (251 of 328) |
+
+95% intervals (company bootstrap, 1000 rounds):
+
+- mae30ReductionVsFlat: 31% to 42%
+- mae90ReductionVsFlat: 10% to 29%
+- coverage90: 72% to 83%
+- minimumRecall: 76% to 96%
+- minimumFalseAlarmShare: 23% to 46%
+- minimumEventsWarnedFirst: 76% to 97%
 
 | Archetype | runway 30-day MAE | Flat | Last-30-days |
 |---|---:|---:|---:|
-| CONSULTANCY | 43,198 | 73,132 | 116,042 |
-| AGENCY | 79,409 | 135,843 | 209,038 |
-| RETAIL | 31,451 | 51,047 | 83,544 |
-| CONTRACTOR | 80,624 | 115,285 | 161,875 |
+| CONSULTANCY | 55,004 | 84,020 | 127,120 |
+| AGENCY | 61,563 | 107,552 | 170,870 |
+| RETAIL | 30,314 | 49,823 | 81,345 |
+| CONTRACTOR | 79,865 | 112,529 | 169,230 |
 
-Runtime: 19.5 s
+Runtime: 18.7 s
