@@ -24,6 +24,8 @@
     <archunit.version>1.4.1</archunit.version>
     <spotless.version>2.44.5</spotless.version>
     <palantir-java-format.version>2.74.0</palantir-java-format.version>
+    <!-- Default for ./mvnw exec:java; override with -Dexec.mainClass=... -->
+    <exec.mainClass>io.github.moyalshoham.runway.backtest.BacktestCli</exec.mainClass>
   </properties>
 
   <dependencies>
@@ -140,7 +142,6 @@
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <configuration>
-          <mainClass>io.github.moyalshoham.runway.backtest.BacktestCli</mainClass>
           <classpathScope>runtime</classpathScope>
         </configuration>
       </plugin>
