@@ -17,6 +17,10 @@ spring:
 
 server:
   port: ${PORT:8080}
+  tomcat:
+    # Read and discard bodies up to 10 MB after rejecting them, so a too-large upload gets a 413
+    # response instead of a reset connection; anything larger is cut off.
+    max-swallow-size: 10MB
   error:
     include-message: never
     include-stacktrace: never
