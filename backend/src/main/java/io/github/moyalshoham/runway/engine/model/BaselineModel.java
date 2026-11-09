@@ -16,7 +16,9 @@ import java.util.TreeMap;
  *
  * <p>Simulated with a weekly block bootstrap over the last {@code windowDays}: each future week is a
  * copy of a randomly chosen past week, which keeps the day-of-week shape and the lumpiness of real
- * spending. Inflows and outflows are de-seasonalised by the month they came from and re-seasonalised
+ * spending. The bootstrap is two-level: each path first resamples the past weeks (a plausible
+ * alternative history) and then draws future weeks from that, so the path also carries the
+ * uncertainty of the average level, not only week-to-week noise. Inflows and outflows are de-seasonalised by the month they came from and re-seasonalised
  * for the month they are projected into.
  */
 public final class BaselineModel {
@@ -94,8 +96,12 @@ public final class BaselineModel {
     public BigDecimal[] sample(LocalDate asOf, int horizonDays, SplittableRandom rng) {
         BigDecimal[] flows = filled(horizonDays);
         int offset = (int) (ChronoUnit.DAYS.between(windowStart, asOf.plusDays(1)) % 7);
+        int[] history = new int[weeks];
+        for (int w = 0; w < weeks; w++) {
+            history[w] = rng.nextInt(weeks);
+        }
         for (int blockStart = 0; blockStart < horizonDays; blockStart += 7) {
-            int week = rng.nextInt(weeks);
+            int week = history[rng.nextInt(weeks)];
             for (int k = 0; k < 7 && blockStart + k < horizonDays; k++) {
                 int target = blockStart + k;
                 int source = week * 7 + Math.floorMod(k + offset, 7);

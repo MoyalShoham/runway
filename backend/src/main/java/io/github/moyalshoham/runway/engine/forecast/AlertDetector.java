@@ -22,7 +22,7 @@ import java.util.Optional;
  */
 final class AlertDetector {
 
-    static final double LIKELY = 0.6;
+    static final double LIKELY = 0.75;
     private static final int MAX_DRIVERS = 5;
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 

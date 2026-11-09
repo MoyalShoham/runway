@@ -45,6 +45,8 @@ public final class Forecaster {
             }
         }
 
+        inflateDispersion(balances, settings.dispersion());
+
         BigDecimal minimum = settings.minimumBalance();
         List<DailyPoint> days = new ArrayList<>(horizon);
         BigDecimal[] column = new BigDecimal[paths];
@@ -104,6 +106,30 @@ public final class Forecaster {
                 model.documentPatterns(),
                 model.doubtfulInvoices(),
                 model.diagnostics());
+    }
+
+    /**
+     * Moves every path away from the per-day median path by {@code factor}: balance' = median +
+     * factor * (balance - median). Medians are unchanged; spread, breach probabilities and alerts all
+     * widen together, so they stay consistent with each other.
+     */
+    static void inflateDispersion(BigDecimal[][] balances, double factor) {
+        if (factor == 1.0) {
+            return;
+        }
+        int paths = balances.length;
+        BigDecimal[] column = new BigDecimal[paths];
+        for (int h = 0; h < balances[0].length; h++) {
+            for (int p = 0; p < paths; p++) {
+                column[p] = balances[p][h];
+            }
+            Arrays.sort(column);
+            BigDecimal median = quantile(column, 0.5);
+            for (int p = 0; p < paths; p++) {
+                BigDecimal deviation = balances[p][h].subtract(median);
+                balances[p][h] = median.add(Money.times(deviation, factor));
+            }
+        }
     }
 
     /** Nearest-rank quantile of a sorted array. */

@@ -203,4 +203,42 @@ class ForecasterTest {
                 .findFirst()
                 .orElseThrow();
     }
+
+    @Test
+    void ownerLoansAndDividendsAreNotProjected() {
+        List<BankTransaction> txs = new ArrayList<>(steadyBusiness());
+        txs.addAll(monthly(YearMonth.of(2025, 1), 12, 20, "-15000", "דיבידנד לבעלים"));
+        txs.addAll(monthly(YearMonth.of(2025, 1), 12, 22, "15000", "הלוואת בעלים"));
+        Forecast f = forecaster.forecast(snapshot(txs, List.of()), ForecastSettings.defaults(BigDecimal.ZERO));
+
+        // 11 of each by 20 Dec (the December ones land on the 21st and 22nd, after asOf).
+        assertThat(f.diagnostics().discretionary()).isEqualTo(22);
+        assertThat(f.recurring()).hasSize(2);
+        assertThat(at(f, "2026-01-21")).isEqualByComparingTo("56000");
+    }
+
+    @Test
+    void dispersionWidensTheBandAroundTheSameMedian() {
+        List<BankTransaction> txs = new ArrayList<>(steadyBusiness());
+        Random random = new Random(3);
+        for (LocalDate d = LocalDate.parse("2025-01-02"); !d.isAfter(AS_OF); d = d.plusDays(1)) {
+            if (random.nextDouble() < 0.5) {
+                txs.add(new BankTransaction(
+                        d, BigDecimal.valueOf(-(20 + random.nextInt(900))), "Card " + random.nextInt(30), ""));
+            }
+        }
+        CashModel narrow = CashModel.build(
+                snapshot(txs, List.of()),
+                ForecastSettings.defaults(BigDecimal.ZERO).withDispersion(1.0));
+        CashModel wide = CashModel.build(
+                snapshot(txs, List.of()),
+                ForecastSettings.defaults(BigDecimal.ZERO).withDispersion(2.0));
+
+        DailyPoint a = forecaster.forecast(narrow, List.of()).days().getLast();
+        DailyPoint b = forecaster.forecast(wide, List.of()).days().getLast();
+
+        assertThat(b.p50()).isEqualByComparingTo(a.p50());
+        assertThat(b.p90().subtract(b.p10()))
+                .isGreaterThan(a.p90().subtract(a.p10()).multiply(new BigDecimal("1.9")));
+    }
 }

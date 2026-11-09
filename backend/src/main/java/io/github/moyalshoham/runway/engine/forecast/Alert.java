@@ -32,9 +32,9 @@ public record Alert(
     }
 
     public enum Severity {
-        /** At least 60% of paths breach. */
+        /** At least 75% of paths breach. */
         LIKELY,
-        /** At least the configured alert probability, under 60%. */
+        /** At least the configured alert probability, under 75%. */
         POSSIBLE
     }
 

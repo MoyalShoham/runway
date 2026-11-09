@@ -17,9 +17,10 @@ import java.util.TreeMap;
  * (project work, ad-hoc supplier orders).
  *
  * <p>Arrivals are a Poisson process whose rate is the recent, de-seasonalised issue rate times the
- * seasonal factor of the target month. Each new document copies a recent real one (counterparty,
- * amount, payment terms), so a large client's invoices stay large and keep that client's payment
- * habits.
+ * seasonal factor of the target month. The rate itself is uncertain (it was estimated from a few
+ * dozen documents), so each path first draws its own rate from the Gamma posterior of the observed
+ * count. Each new document copies a recent real one (counterparty, amount, payment terms), so a large
+ * client's invoices stay large and keep that client's payment habits.
  */
 public final class AdHocDocumentModel {
 
@@ -33,11 +34,14 @@ public final class AdHocDocumentModel {
 
     private final List<Template> templates;
     private final double ratePerDay;
+    private final double observedCount;
     private final SeasonalIndex season;
 
-    private AdHocDocumentModel(List<Template> templates, double ratePerDay, SeasonalIndex season) {
+    private AdHocDocumentModel(
+            List<Template> templates, double ratePerDay, double observedCount, SeasonalIndex season) {
         this.templates = List.copyOf(templates);
         this.ratePerDay = ratePerDay;
+        this.observedCount = observedCount;
         this.season = season;
     }
 
@@ -73,7 +77,7 @@ public final class AdHocDocumentModel {
         int observedDays = enoughHistory ? windowDays : (int) ChronoUnit.DAYS.between(earliest, asOf) + 1;
         double denominator = enoughHistory ? seasonDays : Math.max(observedDays, 1);
         double rate = templates.isEmpty() ? 0 : inWindow / denominator;
-        return new AdHocDocumentModel(templates, rate, season);
+        return new AdHocDocumentModel(templates, rate, inWindow, season);
     }
 
     public List<NewDocument> generate(LocalDate asOf, int horizonDays, SplittableRandom rng) {
@@ -81,9 +85,11 @@ public final class AdHocDocumentModel {
         if (templates.isEmpty() || ratePerDay <= 0) {
             return docs;
         }
+        // Gamma(n + 1/2) / (n + 1/2): posterior of the rate relative to its point estimate.
+        double rateFactor = Gamma.sample(observedCount + 0.5, rng) / (observedCount + 0.5);
         for (int h = 1; h <= horizonDays; h++) {
             LocalDate day = asOf.plusDays(h);
-            int n = Poisson.sample(expectedPerDay(day), rng);
+            int n = Poisson.sample(expectedPerDay(day) * rateFactor, rng);
             for (int i = 0; i < n; i++) {
                 docs.add(new NewDocument(day, templates.get(rng.nextInt(templates.size()))));
             }

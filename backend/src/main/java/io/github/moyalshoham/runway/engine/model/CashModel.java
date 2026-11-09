@@ -18,8 +18,8 @@ import java.util.Set;
 
 /**
  * The fitted model of a company's cash flows, split into components that never overlap: each bank
- * transaction is explained by exactly one of document settlement, VAT, a recurring pattern or the
- * irregular baseline.
+ * transaction is explained by exactly one of document settlement, VAT, a discretionary owner
+ * decision (not projected), a recurring pattern or the irregular baseline.
  */
 public record CashModel(
         CompanySnapshot snapshot,
@@ -40,9 +40,17 @@ public record CashModel(
     /** A recurring series of invoices (a retainer) or bills (the accountant's monthly fee). */
     public record RecurringDocuments(DocumentType type, RecurringPattern pattern, int termDays) {}
 
-    /** How the history was split between components. */
+    /**
+     * How the history was split between components. Discretionary flows (owner loans, dividends) are
+     * owner decisions and are not projected.
+     */
     public record Diagnostics(
-            int transactions, int settledByDocuments, int vatPayments, int recurring, int irregular) {}
+            int transactions,
+            int settledByDocuments,
+            int vatPayments,
+            int discretionary,
+            int recurring,
+            int irregular) {}
 
     private static final RecurringDetector DETECTOR = new RecurringDetector();
 
@@ -52,6 +60,7 @@ public record CashModel(
 
         List<BankTransaction> vatTxs = new ArrayList<>();
         Set<Integer> vatIndexes = new HashSet<>();
+        Set<Integer> discretionary = new HashSet<>();
         Map<String, List<Occurrence>> groups = new LinkedHashMap<>();
         Map<String, Integer> groupSign = new LinkedHashMap<>();
         for (int i = 0; i < txs.size(); i++) {
@@ -63,6 +72,10 @@ public record CashModel(
             if (settings.vat().counterpartyPattern().matcher(key).find()) {
                 vatTxs.add(t);
                 vatIndexes.add(i);
+                continue;
+            }
+            if (settings.discretionaryPattern().matcher(key).find()) {
+                discretionary.add(i);
                 continue;
             }
             int sign = t.amount().signum();
@@ -81,7 +94,10 @@ public record CashModel(
         List<BankTransaction> residual = new ArrayList<>();
         for (int i = 0; i < txs.size(); i++) {
             BankTransaction t = txs.get(i);
-            if (!settled.contains(i) && !recurring.contains(i) && !vatIndexes.contains(i)) {
+            if (!settled.contains(i)
+                    && !recurring.contains(i)
+                    && !vatIndexes.contains(i)
+                    && !discretionary.contains(i)) {
                 residual.add(t);
             }
         }
@@ -149,7 +165,13 @@ public record CashModel(
                 openInvoices,
                 openBills,
                 doubtful,
-                new Diagnostics(txs.size(), settled.size(), vatTxs.size(), recurring.size(), residual.size()));
+                new Diagnostics(
+                        txs.size(),
+                        settled.size(),
+                        vatTxs.size(),
+                        discretionary.size(),
+                        recurring.size(),
+                        residual.size()));
     }
 
     public DelayModel delays(DocumentType type) {
