@@ -1,0 +1,37 @@
+# One command: docker compose up --build   then open http://localhost:3000 (RUNWAY_PORT to change)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: runway
+      POSTGRES_USER: runway
+      POSTGRES_PASSWORD: ${RUNWAY_DB_PASSWORD:-runway}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runway -d runway"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      RUNWAY_DB_URL: jdbc:postgresql://db:5432/runway
+      RUNWAY_DB_USER: runway
+      RUNWAY_DB_PASSWORD: ${RUNWAY_DB_PASSWORD:-runway}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Not published: the frontend's nginx proxies /api to it.
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      # Bound to localhost only: runway has no authentication (see README).
+      - "127.0.0.1:${RUNWAY_PORT:-3000}:80"
+
+volumes:
+  pgdata:
