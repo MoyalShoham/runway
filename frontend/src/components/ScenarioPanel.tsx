@@ -74,12 +74,14 @@ export function ScenarioPanel({ companyId, customers, history, minimum }: Props)
           {(draft.type === 'CUSTOMER_PAYS_LATE' || draft.type === 'LOSE_CUSTOMER') && (
             <label>
               Customer
-              <input list="customers" value={draft.customer} onChange={set('customer')} />
-              <datalist id="customers">
+              <select value={draft.customer} onChange={set('customer')}>
+                <option value="">Choose…</option>
                 {customers.map((c) => (
-                  <option key={c} value={c} />
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </label>
           )}
           {draft.type === 'CUSTOMER_PAYS_LATE' && (

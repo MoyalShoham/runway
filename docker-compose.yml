@@ -23,6 +23,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # The JVM sizes its heap from this limit (MaxRAMPercentage=75).
+    mem_limit: 1g
     # Not published: the frontend's nginx proxies /api to it.
 
   frontend:

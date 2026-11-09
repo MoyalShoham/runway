@@ -19,6 +19,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('forecast')
   const [error, setError] = useState<string | null>(null)
   const [creatingDemo, setCreatingDemo] = useState(false)
+  const [showNew, setShowNew] = useState(false)
 
   const selected = picked ?? companies[0]?.id ?? null
   const company = companies.find((c) => c.id === selected)
@@ -99,6 +100,32 @@ export default function App() {
           <button type="button" onClick={() => void demo()} disabled={creatingDemo}>
             {creatingDemo ? 'Generating…' : 'Load a demo company'}
           </button>
+          {companies.length > 0 && (
+            <button type="button" onClick={() => setShowNew((v) => !v)} aria-expanded={showNew}>
+              New company
+            </button>
+          )}
+          {company && (
+            <button
+              type="button"
+              className="danger-link"
+              onClick={() => {
+                if (window.confirm(`Delete ${company.name} and all its data?`)) {
+                  api
+                    .deleteCompany(company.id)
+                    .then(() => {
+                      setPicked(null)
+                      setCompaniesVersion((v) => v + 1)
+                    })
+                    .catch((e: unknown) =>
+                      setError(e instanceof ApiError ? e.message : 'Could not delete'),
+                    )
+                }
+              }}
+            >
+              Delete
+            </button>
+          )}
         </div>
       </header>
 
@@ -108,10 +135,11 @@ export default function App() {
         </p>
       )}
 
-      {companies.length === 0 && !error && (
+      {(companies.length === 0 || showNew) && !error && (
         <NewCompany
           onCreated={(c) => {
             setPicked(c.id)
+            setShowNew(false)
             setCompaniesVersion((v) => v + 1)
           }}
         />
@@ -183,7 +211,7 @@ export default function App() {
                 <ScenarioPanel
                   key={company.id}
                   companyId={company.id}
-                  customers={customersOf(forecast)}
+                  customers={forecast.customers}
                   history={history}
                   minimum={toNumber(forecast.minimumBalance)}
                 />
@@ -204,17 +232,6 @@ interface Loaded {
   version: number
   forecast: Forecast
   history: BalancePoint[]
-}
-
-function customersOf(f: Forecast): string[] {
-  const names = new Set<string>()
-  for (const d of f.recurringDocuments) if (d.type === 'INVOICE') names.add(d.label)
-  for (const s of f.schedule) {
-    const m = /^Invoice \S+ · (.+)$/.exec(s.label)
-    if (m?.[1]) names.add(m[1])
-  }
-  for (const r of f.recurring) if (r.direction === 'IN') names.add(r.label)
-  return [...names].sort()
 }
 
 function Summary({

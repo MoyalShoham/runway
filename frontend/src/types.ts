@@ -92,6 +92,8 @@ export interface Forecast {
   recurring: Recurring[]
   recurringDocuments: RecurringDocument[]
   doubtfulInvoices: { number: string; counterparty: string; dueDate: string; amount: Money }[]
+  /** Names a scenario can refer to: invoice customers and payers of recurring income. */
+  customers: string[]
 }
 
 export interface BalancePoint {

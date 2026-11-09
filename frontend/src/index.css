@@ -342,6 +342,11 @@ meter {
   background: none;
   padding: 0 6px;
 }
+.danger-link {
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+}
 .error {
   color: var(--danger);
 }

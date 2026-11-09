@@ -16,4 +16,3 @@ frontend/playwright-report/
 .vscode/
 *.iml
 .DS_Store
-scratch-eval/

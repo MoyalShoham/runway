@@ -19,8 +19,14 @@ export class ApiError extends Error {
   }
 }
 
+/** Every write carries this header; the API refuses writes without it (CSRF protection). */
+const CLIENT_HEADER = { 'X-Runway-Client': 'web' }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, init)
+  const method = init?.method ?? 'GET'
+  const withHeader: RequestInit | undefined =
+    method === 'GET' ? init : { ...init, headers: { ...CLIENT_HEADER, ...(init?.headers ?? {}) } }
+  const response = await fetch(`/api${path}`, withHeader)
   if (!response.ok) {
     let problem: Problem = {}
     try {
@@ -56,6 +62,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ minimumBalance }),
     }),
+  deleteCompany: (id: number) => request<void>(`/companies/${id}`, { method: 'DELETE' }),
   demo: (seed: number) => request<Company>(`/demo?seed=${seed}`, { method: 'POST' }),
   forecast: (id: number) => request<Forecast>(`/companies/${id}/forecast`),
   history: (id: number, days = 120) =>

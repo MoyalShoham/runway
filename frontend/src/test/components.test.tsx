@@ -89,6 +89,7 @@ const forecast: Forecast = {
   recurring: [],
   recurringDocuments: [],
   doubtfulInvoices: [],
+  customers: ['Acme'],
 }
 
 describe('App', () => {
@@ -128,5 +129,22 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Cannot reach the runway API'),
     )
+  })
+})
+
+describe('api client', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('sends the client header on writes but not on reads', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await import('../api')
+
+    await api.demo(3)
+    await api.companies()
+
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit | undefined][]
+    expect(calls[0]?.[1]?.headers).toMatchObject({ 'X-Runway-Client': 'web' })
+    expect(calls[1]?.[1]).toBeUndefined()
   })
 })
