@@ -241,4 +241,71 @@ class ForecasterTest {
         assertThat(b.p90().subtract(b.p10()))
                 .isGreaterThan(a.p90().subtract(a.p10()).multiply(new BigDecimal("1.9")));
     }
+
+    @Test
+    void losingACustomerNeverRaisesTheBalanceWithAdHocInvoicesInPlay() {
+        // Regression for common random numbers: skipping the lost customer's new invoices used to
+        // shift the random draws of every later new invoice.
+        List<Document> docs = new ArrayList<>();
+        Random random = new Random(5);
+        String[] customers = {"Acme", "Beta", "Gamma", "Delta"};
+        for (LocalDate d = LocalDate.parse("2025-01-05"); d.isBefore(AS_OF); d = d.plusDays(4 + random.nextInt(10))) {
+            String customer = customers[random.nextInt(customers.length)];
+            LocalDate due = d.plusDays(30);
+            LocalDate paid = due.plusDays(random.nextInt(25));
+            docs.add(invoice(
+                    "P" + d,
+                    customer,
+                    d.toString(),
+                    due.toString(),
+                    String.valueOf(2000 + random.nextInt(20000)),
+                    paid.isAfter(AS_OF) ? null : paid.toString()));
+        }
+        CashModel model = CashModel.build(
+                snapshot(steadyBusiness(), docs),
+                ForecastSettings.defaults(BigDecimal.ZERO).withDispersion(1.0));
+
+        Forecast base = forecaster.forecast(model, List.of());
+        Forecast lost =
+                forecaster.forecast(model, List.of(new Scenario.LoseCustomer("Beta", LocalDate.parse("2025-12-21"))));
+
+        for (int h = 0; h < base.days().size(); h++) {
+            assertThat(lost.days().get(h).p10())
+                    .isLessThanOrEqualTo(base.days().get(h).p10());
+            assertThat(lost.days().get(h).p50())
+                    .isLessThanOrEqualTo(base.days().get(h).p50());
+            assertThat(lost.days().get(h).p90())
+                    .isLessThanOrEqualTo(base.days().get(h).p90());
+        }
+    }
+
+    @Test
+    void theCompanysOwnBillsAreAlwaysPaid() {
+        // A bill open far longer than any bill was ever paid late: invoices like this may never be
+        // collected, but the business's own bills do not vanish.
+        List<Document> docs = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            LocalDate due = LocalDate.parse("2025-01-10").plusMonths(i);
+            docs.add(io.github.moyalshoham.runway.engine.Fixtures.bill(
+                    "B" + i, "Supplier", due.minusDays(30).toString(), due.toString(), "1000", due.toString()));
+        }
+        docs.add(io.github.moyalshoham.runway.engine.Fixtures.bill(
+                "LATE", "Supplier", "2025-08-01", "2025-09-01", "7000", null));
+        Forecast f = forecaster.forecast(snapshot(steadyBusiness(), docs), ForecastSettings.defaults(BigDecimal.ZERO));
+
+        assertThat(f.componentTotals().get(Component.OPEN_BILLS)).isEqualByComparingTo("-7000");
+    }
+
+    @Test
+    void aNewHireStartingLongAgoCostsOnlyTheMonthsInTheHorizon() {
+        CashModel model =
+                CashModel.build(snapshot(steadyBusiness(), List.of()), ForecastSettings.defaults(BigDecimal.ZERO));
+        long started = System.nanoTime();
+        Forecast hired = forecaster.forecast(
+                model, List.of(new Scenario.NewHire(LocalDate.of(1, 1, 1), new BigDecimal("10000"), 9, "Old timer")));
+
+        assertThat((System.nanoTime() - started) / 1e9).isLessThan(5.0);
+        // Paid 9 Jan, 9 Feb and 9 Mar 2026 within the 90 days after 20 Dec 2025.
+        assertThat(hired.componentTotals().get(Component.SCENARIO)).isEqualByComparingTo("-30000");
+    }
 }

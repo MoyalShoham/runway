@@ -118,4 +118,23 @@ class DelayModelTest {
 
         assertThat(m.observations("acme")).isZero();
     }
+
+    @Test
+    void aCustomerWhoseOnlyInvoicesAreOpenBorrowsThePooledCurve() {
+        // Regression: the customer's own curve has observations but no payments; it used to fall
+        // through to "paid on the due date".
+        List<Document> docs = new ArrayList<>(history("others", 30, 11));
+        for (int i = 0; i < 3; i++) {
+            LocalDate due = AS_OF.minusDays(60);
+            docs.add(invoice("new-" + i, "newco", due.minusDays(30).toString(), due.toString(), "1000", null));
+        }
+        DelayModel m = DelayModel.fit(docs, DocumentType.INVOICE, AS_OF, 3);
+
+        SplittableRandom rng = new SplittableRandom(9);
+        long early = IntStream.range(0, 2000)
+                .map(i -> m.sample("newco", -30, rng))
+                .filter(d -> d != DelayModel.NOT_PAID && d < 20)
+                .count();
+        assertThat(early).isZero();
+    }
 }

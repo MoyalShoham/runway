@@ -82,9 +82,11 @@ public final class DelayModel {
         int n = own == null ? 0 : own.observations;
         Curve curve = n > 0 && rng.nextDouble() < n / (n + priorStrength) ? own : pooled;
         if (curve.isEmpty()) {
-            curve = own != null && !own.isEmpty() ? own : null;
+            // A curve with no payment events (e.g. a customer whose only invoices are still open)
+            // says nothing about when payments happen; use the other one.
+            curve = curve == own ? pooled : own;
         }
-        if (curve == null) {
+        if (curve == null || curve.isEmpty()) {
             return Math.max(0, daysOverdue + 1);
         }
         int delay = curve.sampleAfter(daysOverdue, rng);
@@ -95,10 +97,13 @@ public final class DelayModel {
         return Math.max(delay, daysOverdue + 1);
     }
 
-    /** Median delay of the pooled curve, for display; 0 without history. */
+    /**
+     * Median delay for display: the counterparty's own curve once it has at least as many
+     * observations as the prior strength, otherwise the pooled curve; 0 without history.
+     */
     public int typicalDelay(String counterpartyKey) {
         Curve own = byCounterparty.get(counterpartyKey);
-        Curve c = own != null && own.observations >= priorStrength ? own : pooled;
+        Curve c = own != null && own.observations >= priorStrength && !own.isEmpty() ? own : pooled;
         return c.isEmpty() ? 0 : c.quantile(0.5);
     }
 

@@ -33,13 +33,19 @@ class VatModelTest {
     }
 
     @Test
-    void vatIsTheVatPortionOfGrossAmounts() {
+    void vatIsThePortionOfGrossAtTheRateInForceOnTheDocumentDate() {
         VatModel m =
-                VatModel.fit(List.of(), List.of(), LocalDate.parse("2025-01-01"), LocalDate.parse("2025-06-01"), IL);
+                VatModel.fit(List.of(), List.of(), LocalDate.parse("2024-01-01"), LocalDate.parse("2025-06-01"), IL);
 
-        assertThat(m.signedVat(DocumentType.INVOICE, new BigDecimal("11800.00")))
+        // 18% from 1 January 2025, 17% before.
+        assertThat(m.signedVat(DocumentType.INVOICE, new BigDecimal("11800.00"), LocalDate.parse("2025-01-01")))
                 .isEqualByComparingTo("1800.00");
-        assertThat(m.signedVat(DocumentType.BILL, new BigDecimal("1180.00"))).isEqualByComparingTo("-180.00");
+        assertThat(m.signedVat(DocumentType.INVOICE, new BigDecimal("11700.00"), LocalDate.parse("2024-12-31")))
+                .isEqualByComparingTo("1700.00");
+        assertThat(m.signedVat(DocumentType.BILL, new BigDecimal("1180.00"), LocalDate.parse("2025-03-01")))
+                .isEqualByComparingTo("-180.00");
+        assertThat(IL.rateOn(LocalDate.parse("2014-01-01"))).isEqualByComparingTo("0.18");
+        assertThat(IL.rateOn(LocalDate.parse("2000-01-01"))).isEqualByComparingTo("0.17");
     }
 
     @Test
@@ -54,7 +60,7 @@ class VatModelTest {
 
     @Test
     void residualCapturesVatThatDocumentsDoNotExplain() {
-        // Each period: invoices with 1,800 VAT and bills with 180 VAT, but 2,000 was paid
+        // Each 2025 period: invoices with 1,800 VAT and bills with 180 VAT, but 2,000 was paid
         // (card sales carry extra output VAT). Residual = 2,000 - 1,620 = 380.
         List<Document> docs = new ArrayList<>();
         List<BankTransaction> vat = new ArrayList<>();

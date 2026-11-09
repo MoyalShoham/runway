@@ -56,4 +56,31 @@ class PaymentMatcherTest {
 
         assertThat(PaymentMatcher.settledTransactions(txs, docs)).isEmpty();
     }
+
+    @Test
+    void aPaymentNetOfWithholdingTaxFromTheSameCustomerMatches() {
+        // Invoice 11,800 (10,000 + VAT); the customer withholds 5% of the net at source and pays 11,300.
+        var txs = List.of(tx("2025-05-11", "11300", "Acme Ltd"), tx("2025-05-11", "11300", "Someone Else"));
+        var docs = List.of(invoice("1001", "Acme", "2025-04-01", "2025-05-01", "11800", "2025-05-10"));
+
+        assertThat(PaymentMatcher.settledTransactions(txs, docs)).containsExactly(0);
+    }
+
+    @Test
+    void tooSmallAPartAndOtherCustomersDoNotMatch() {
+        var docs = List.of(invoice("1001", "Acme", "2025-04-01", "2025-05-01", "11800", "2025-05-10"));
+
+        assertThat(PaymentMatcher.settledTransactions(List.of(tx("2025-05-10", "5900", "Acme")), docs))
+                .isEmpty();
+        assertThat(PaymentMatcher.settledTransactions(List.of(tx("2025-05-10", "11300", "Beta")), docs))
+                .isEmpty();
+    }
+
+    @Test
+    void anExactSameCustomerPaymentBeatsAPartialOne() {
+        var txs = List.of(tx("2025-05-10", "11300", "Acme"), tx("2025-05-12", "11800", "Acme"));
+        var docs = List.of(invoice("1001", "Acme", "2025-04-01", "2025-05-01", "11800", "2025-05-10"));
+
+        assertThat(PaymentMatcher.settledTransactions(txs, docs)).containsExactly(1);
+    }
 }

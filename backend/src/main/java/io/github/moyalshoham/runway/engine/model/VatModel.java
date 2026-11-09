@@ -67,7 +67,10 @@ public final class VatModel {
         Map<LocalDate, BigDecimal> docVat = new HashMap<>();
         VatModel shape = new VatModel(settings, true, Money.ZERO, List.of(), Map.of(), List.of());
         for (Document d : documents) {
-            docVat.merge(shape.periodOf(d.issueDate()).start(), shape.signedVat(d.type(), d.amount()), BigDecimal::add);
+            docVat.merge(
+                    shape.periodOf(d.issueDate()).start(),
+                    shape.signedVat(d.type(), d.amount(), d.issueDate()),
+                    BigDecimal::add);
         }
         if (vatTransactions.isEmpty()) {
             return new VatModel(settings, false, Money.ZERO, List.of(), docVat, List.of());
@@ -113,9 +116,12 @@ public final class VatModel {
         return residual;
     }
 
-    /** VAT effect on the liability of a document: invoices add VAT owed, bills reduce it. */
-    public BigDecimal signedVat(DocumentType type, BigDecimal gross) {
-        BigDecimal vat = Money.vatPortion(gross, settings.rate());
+    /**
+     * VAT effect on the liability of a document issued on {@code issued}: invoices add VAT owed,
+     * bills reduce it. Uses the rate in force on the document date.
+     */
+    public BigDecimal signedVat(DocumentType type, BigDecimal gross, LocalDate issued) {
+        BigDecimal vat = Money.vatPortion(gross, settings.rateOn(issued));
         return type == DocumentType.INVOICE ? vat : vat.negate();
     }
 

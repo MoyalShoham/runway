@@ -59,7 +59,8 @@ public final class AdHocDocumentModel {
         LocalDate windowStart = asOf.minusDays(windowDays);
         LocalDate templateStart = asOf.minusDays(TEMPLATE_LOOKBACK_DAYS);
         for (Document d : adHoc) {
-            monthly.merge(YearMonth.from(d.issueDate()), d.amount(), BigDecimal::add);
+            // Seasonality is fitted on document counts, because it scales the arrival rate.
+            monthly.merge(YearMonth.from(d.issueDate()), BigDecimal.ONE, BigDecimal::add);
             if (d.issueDate().isAfter(windowStart)) {
                 inWindow++;
             }
@@ -99,9 +100,5 @@ public final class AdHocDocumentModel {
 
     public double expectedPerDay(LocalDate day) {
         return ratePerDay * season.factor(day.getMonth());
-    }
-
-    public List<Template> templates() {
-        return templates;
     }
 }

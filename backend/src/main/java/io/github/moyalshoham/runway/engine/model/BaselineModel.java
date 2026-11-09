@@ -111,15 +111,6 @@ public final class BaselineModel {
         return flows;
     }
 
-    /** Mean irregular net flow for a future day, using the same seasonal scaling as {@link #sample}. */
-    public BigDecimal expected(LocalDate day) {
-        BigDecimal total = Money.ZERO;
-        for (int s = 0; s < inflow.length; s++) {
-            total = total.add(projected(s, day));
-        }
-        return total.divide(BigDecimal.valueOf(inflow.length), Money.SCALE, Money.ROUNDING);
-    }
-
     private BigDecimal projected(int source, LocalDate target) {
         LocalDate sourceDay = windowStart.plusDays(source);
         double inScale = inSeason.factor(target.getMonth()) / inSeason.factor(sourceDay.getMonth());

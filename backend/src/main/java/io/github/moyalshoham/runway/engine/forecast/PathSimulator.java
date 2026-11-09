@@ -37,6 +37,8 @@ final class PathSimulator {
     private final Map<String, LocalDate> lostFrom = new HashMap<>();
     private final List<Scenario.NewHire> hires = new ArrayList<>();
     private final List<Scenario.OneOff> oneOffs = new ArrayList<>();
+    /** Counterparty keys computed once, not once per document per path. */
+    private final Map<String, String> keys = new HashMap<>();
 
     PathSimulator(CashModel model, List<Scenario> scenarios) {
         this.model = model;
@@ -72,11 +74,15 @@ final class PathSimulator {
     private void openDocuments(int path, Accumulator acc, List<Document> docs, Component component) {
         for (Document d : docs) {
             SplittableRandom rng = RandomStreams.of(seed, path, "open:" + d.type() + ":" + d.number());
-            String party = Counterparties.key(d.counterparty());
+            String party = keys.computeIfAbsent(d.counterparty(), Counterparties::key);
             int overdue = (int) ChronoUnit.DAYS.between(d.dueDate(), asOf);
             int delay = model.delays(d.type()).sample(party, overdue, rng);
             if (delay == DelayModel.NOT_PAID) {
-                continue;
+                if (d.type() == DocumentType.INVOICE) {
+                    continue;
+                }
+                // The business decides when its own bills are paid: never assume they vanish.
+                delay = Math.max(0, overdue + 1);
             }
             LocalDate paid = d.dueDate().plusDays(delay + lateDays(d.type(), party));
             String label =
@@ -136,7 +142,8 @@ final class PathSimulator {
                     continue;
                 }
                 BigDecimal amount = sampleAmount(p, rng);
-                simulatedVat.merge(vat.periodOf(issued).start(), vat.signedVat(rd.type(), amount), BigDecimal::add);
+                simulatedVat.merge(
+                        vat.periodOf(issued).start(), vat.signedVat(rd.type(), amount, issued), BigDecimal::add);
                 LocalDate paid = paymentDate(rd.type(), party, issued, rd.termDays(), rng);
                 if (paid == null) {
                     continue;
@@ -155,10 +162,12 @@ final class PathSimulator {
 
     private void adHocDocuments(int path, Accumulator acc, DocumentType type, Map<LocalDate, BigDecimal> simulatedVat) {
         AdHocDocumentModel adHoc = model.adHoc(type);
-        SplittableRandom rng = RandomStreams.of(seed, path, "adhoc:" + type);
+        SplittableRandom arrivals = RandomStreams.of(seed, path, "adhoc:" + type);
         Component c = type == DocumentType.INVOICE ? Component.FUTURE_INVOICES : Component.FUTURE_BILLS;
         String noun = type == DocumentType.INVOICE ? "New invoices" : "New bills";
-        for (AdHocDocumentModel.NewDocument doc : adHoc.generate(asOf, horizon, rng)) {
+        List<AdHocDocumentModel.NewDocument> docs = adHoc.generate(asOf, horizon, arrivals);
+        for (int i = 0; i < docs.size(); i++) {
+            AdHocDocumentModel.NewDocument doc = docs.get(i);
             AdHocDocumentModel.Template t = doc.template();
             LocalDate lost = lostFrom.get(t.counterpartyKey());
             if (type == DocumentType.INVOICE && lost != null && !doc.issueDate().isBefore(lost)) {
@@ -166,8 +175,11 @@ final class PathSimulator {
             }
             simulatedVat.merge(
                     model.vat().periodOf(doc.issueDate()).start(),
-                    model.vat().signedVat(type, t.amount()),
+                    model.vat().signedVat(type, t.amount(), doc.issueDate()),
                     BigDecimal::add);
+            // Each document's payment draw has its own stream, so dropping one document (a lost
+            // customer) leaves every other document's draws unchanged.
+            SplittableRandom rng = RandomStreams.of(seed, path, "adhoc:" + type + ":" + doc.issueDate() + ":" + i);
             LocalDate paid = paymentDate(type, t.counterpartyKey(), doc.issueDate(), t.termDays(), rng);
             if (paid == null) {
                 continue;
@@ -211,7 +223,10 @@ final class PathSimulator {
 
     private void scenarios(Accumulator acc) {
         for (Scenario.NewHire hire : hires) {
-            for (YearMonth m = YearMonth.from(hire.startDate()); ; m = m.plusMonths(1)) {
+            // Months paid before asOf are already in the history; start at the month before asOf.
+            YearMonth first = YearMonth.from(hire.startDate());
+            YearMonth earliest = YearMonth.from(asOf).minusMonths(1);
+            for (YearMonth m = first.isBefore(earliest) ? earliest : first; ; m = m.plusMonths(1)) {
                 LocalDate payDate =
                         BusinessCalendar.nextBusinessDay(m.plusMonths(1).atDay(hire.payDay()));
                 if (payDate.isAfter(end)) {
@@ -271,7 +286,10 @@ final class PathSimulator {
         int overdue = (int) ChronoUnit.DAYS.between(due, asOf);
         int delay = model.delays(type).sample(party, overdue, rng);
         if (delay == DelayModel.NOT_PAID) {
-            return null;
+            if (type == DocumentType.INVOICE) {
+                return null;
+            }
+            delay = Math.max(0, overdue + 1);
         }
         LocalDate paid = due.plusDays(delay + lateDays(type, party));
         if (paid.isBefore(issued)) {
