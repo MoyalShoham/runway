@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: runway
+  datasource:
+    url: ${RUNWAY_DB_URL:jdbc:postgresql://localhost:5432/runway}
+    username: ${RUNWAY_DB_USER:runway}
+    password: ${RUNWAY_DB_PASSWORD:runway}
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

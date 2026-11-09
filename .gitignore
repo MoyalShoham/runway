@@ -1,0 +1,18 @@
+# Java
+backend/target/
+*.class
+.mvn/wrapper/maven-wrapper.jar
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+
+# Env and editors
+.env
+.idea/
+.vscode/
+*.iml
+.DS_Store
