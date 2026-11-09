@@ -20,8 +20,10 @@ assumptions pay off.
 
 **Chosen:** each customer's delay distribution (paid date minus due date) is estimated with
 Kaplan–Meier. Open invoices are right-censored observations ("more than N days so far"). Draws come
-from the customer's own curve with probability n / (n + 3), otherwise from all customers pooled.
-Draws are conditioned on what is known: a 40-day-overdue invoice is paid after day 40, or not at all.
+from the customer's own curve with probability n / (n + 3), otherwise from all customers pooled. A
+curve with no payments at all (a new customer whose invoices are all still open) defers to the
+other one. Draws are conditioned on what is known: a 40-day-overdue invoice is paid after day 40,
+or not at all. "Not at all" applies to invoices only; the company's own bills are always paid.
 
 **Rejected:** the empirical distribution of paid invoices only (the first version). Also rejected:
 a parametric (log-normal) delay model.
@@ -50,7 +52,7 @@ an end-to-end test for this). The same property makes forecasts reproducible.
 **Chosen:** after simulation, move every path away from the per-day median path by a factor (1.6).
 The factor was chosen on the dev split for 80% coverage of the 10–90% band.
 
-**Rejected:** (a) no calibration: coverage was 57–71% on dev. (b) Widening only the displayed
+**Rejected:** (a) no calibration: coverage was 59–71% on dev. (b) Widening only the displayed
 percentiles.
 
 **Why:** the simulation samples the randomness it knows about (delays, dates, weekly spending), but
@@ -59,7 +61,7 @@ arrival rates and a two-level bootstrap added parameter uncertainty but moved co
 Inflating at the path level keeps the band, the breach probabilities and the alerts consistent with
 each other. Widening only the displayed band would show one thing and alert on another. The
 honest caveat: on holdout the 90-day coverage is 71%, so one factor for all horizons does not
-transfer perfectly.
+transfer perfectly. It is 72% on holdout at 90 days.
 
 ## 5. Alerts on path-level breach probability, threshold chosen by F2 on dev
 
@@ -72,7 +74,10 @@ recover). Also rejected: per-day probabilities, which do not answer "will I run 
 
 **Why:** a business owner's question is "what's the chance I run short before the end of the
 quarter, and how much do I need?". The threshold was swept on dev (0.3–0.6) and 0.5 had the best F2
-score (recall weighted over precision): missing a shortfall costs more than a false alarm.
+score (recall weighted over precision): missing a shortfall costs more than a false alarm. (For the
+zero threshold alone, 0.4 scored marginally higher; one setting is used for both.) The backtest
+compares this rule with a crude "less than a month of outflows above the threshold" rule, which
+catches nearly as many shortfalls; runway's advantage is that far fewer of its alerts are false.
 
 ## 6. VAT from documents plus a learned residual
 
@@ -107,10 +112,15 @@ Dev seeds 1–24 are used for every decision; holdout seeds 1001–1060 were run
 the settings.
 
 **Why:** a generator that mirrors the model's assumptions tests nothing. Two generator problems were
-found and fixed on dev before the holdout run. Revenue was calibrated against costs that left out
-card spending and raises, so most companies were deep in losses. Dividends were monthly and had
-their description and counterparty swapped. Both were fixes to the simulated world, not tuning of
-the model, and they happened before holdout was ever run.
+found and fixed on dev before the first holdout run. Revenue was calibrated against costs that left
+out card spending and raises, so most companies were deep in losses. Dividends were monthly and had
+their description and counterparty swapped.
+
+After that run, an independent review found bugs in the model and gaps in the generator's realism
+(no withholding at source, 18% VAT in years when it was 17%). Fixing them changed the data and the
+model, so holdout was run a second time, with unchanged settings. The README reports the second
+run and the first run's numbers. A holdout split that is re-run after bug fixes is weaker evidence
+than a single run; saying so is better than hiding it.
 
 ## 9. Money is `BigDecimal` everywhere, and a string in JSON
 
@@ -121,8 +131,10 @@ relative factors, converted with `BigDecimal.valueOf` before touching an amount.
 **Rejected:** `long` agorot (exact, but easy to misuse at the boundaries). Also rejected: JSON
 numbers, which most clients parse into binary floats.
 
-**Why:** the brief requires it, and a forecast that is off by an agora on a bank balance looks
-broken even when it is not. The Monte Carlo runs on `BigDecimal` too. A full forecast request (load,
+**Why:** a forecast that is off by an agora on a bank balance looks broken even when it is not, and
+binary floats make that happen. The synthetic generator draws its random quantities as doubles and
+rounds each one into `BigDecimal` when it creates a transaction or document. From there on,
+everything is decimal. The Monte Carlo runs on `BigDecimal` too. A full forecast request (load,
 fit, 400 paths × 90 days, JSON) takes about 100 ms on a laptop, so there was no reason to trade
 exactness for speed.
 
@@ -147,3 +159,34 @@ with an ArchUnit test that keeps `engine/` free of Spring, Jackson and the datab
 graph to map, and JPA would add lazy-loading and dirty-checking for nothing. A multi-module build
 would enforce the engine boundary at compile time, but with more build plumbing. ArchUnit enforces
 the same rule as a test.
+
+## 12. Link payments net of withholding tax to their invoices
+
+**Chosen:** a bank payment settles an invoice when it is the exact amount, or 70–100% of it from the
+same counterparty, within three days of the recorded payment date. Exact same-counterparty matches
+win, then partial same-counterparty, then exact from anyone.
+
+**Rejected:** exact amounts only (the first version).
+
+**Why:** Israeli customers who pay for services often withhold 2–30% at source and pay the rest.
+With exact matching those payments stayed unlinked, so the same customer's income was projected
+twice: once from its invoices and once as a recurring bank inflow. The backtest could not see this
+because the first generator always paid in full; the review found it by importing withheld payments.
+The generator now withholds for about a third of business customers.
+
+## 13. A local tool, hardened as if it were not
+
+**Chosen:**
+- No authentication. The UI is bound to `127.0.0.1` in Docker Compose.
+- State-changing API calls need an `X-Runway-Client` header (CSRF).
+- nginx drops requests for unknown host names (DNS rebinding).
+- Uploads are bounded in size, rows, field length and digits.
+- A limited number of simulations run at once, with a 503 beyond that.
+- Per-company caps on stored rows.
+
+**Why:** "it only runs on localhost" is not a security boundary. A web page the user visits can
+send a multipart form to `127.0.0.1` without a preflight, and a DNS-rebinding page can read the
+responses. The review showed both, plus a CSV field and a scenario date that each pinned a CPU.
+Real multi-user deployment would need authentication and per-tenant isolation; that is listed as a
+limitation rather than half-built.
+

@@ -1,4 +1,4 @@
 name: Levi Creative Studio #1
 opening date: 2022-12-31
-opening balance: 160038.72
+opening balance: 186474.16
 minimum balance: 80000.00
