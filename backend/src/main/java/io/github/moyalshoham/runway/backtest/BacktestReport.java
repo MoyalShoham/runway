@@ -12,7 +12,9 @@ import java.util.Map;
  * @param forecasts number of (company, cutoff) forecasts
  * @param horizons error metrics at each horizon
  * @param shortfalls warning metrics per threshold ("minimum", "zero")
- * @param byArchetype 30-day mean absolute error per business type, engine vs. best naive baseline
+ * @param confidence95 95% intervals from a company-level bootstrap for the headline numbers
+ * @param byArchetype 30-day mean absolute error per business type, engine vs. naive baselines
+ * @param uncommittedChanges true if the working tree differed from {@code gitCommit} when this ran
  */
 public record BacktestReport(
         String split,
@@ -23,8 +25,10 @@ public record BacktestReport(
         double dispersion,
         List<HorizonMetrics> horizons,
         Map<String, ShortfallMetrics> shortfalls,
+        Map<String, Interval> confidence95,
         Map<String, Map<String, BigDecimal>> byArchetype,
         String gitCommit,
+        boolean uncommittedChanges,
         double seconds) {
 
     /**
@@ -59,25 +63,36 @@ public record BacktestReport(
             double coverageExFinancing) {}
 
     /**
-     * Shortfall warnings. A cutoff is eligible when the balance is still at or above the threshold;
-     * it is a real shortfall when the actual balance first drops below the threshold 7 to 90 days
-     * later, so there was at least a week to act.
+     * Shortfall warnings for one threshold. A cutoff is eligible when the balance is still at or
+     * above the threshold; it is a real shortfall when the actual balance first drops below the
+     * threshold 7 to 90 days later, so there was at least a week to act. Cutoffs are 14 days apart
+     * and look 90 days ahead, so one shortfall event appears at several cutoffs; {@code events}
+     * counts distinct (company, first day below the threshold).
      *
-     * @param recall share of real shortfalls the method warned about at that cutoff
-     * @param falseAlarmShare share of the method's alerts after which no shortfall happened within 90 days
+     * @param methods "runway", "lastThirtyDays" (last 30 days repeated) and "cushion" (alert when the
+     *     balance is less than one month of outflows above the threshold)
      */
-    public record ShortfallMetrics(
-            int eligible,
-            int realShortfalls,
-            int warnedRunway,
-            int alertsRunway,
-            int falseAlarmsRunway,
-            double recallRunway,
-            double falseAlarmShareRunway,
-            int warnedRepeat,
-            int alertsRepeat,
-            int falseAlarmsRepeat,
-            double recallRepeat,
-            double falseAlarmShareRepeat,
-            int medianLeadDaysWarned) {}
+    public record ShortfallMetrics(int eligible, int realShortfalls, int events, Map<String, Warnings> methods) {}
+
+    /**
+     * How one method warned.
+     *
+     * @param recall share of real-shortfall cutoffs at which the method warned
+     * @param falseAlarmShare share of the method's alerts after which no shortfall happened within 90 days
+     * @param eventsWarnedAny events warned at one or more of the cutoffs that saw them coming
+     * @param eventsWarnedFirst events warned at the earliest cutoff that saw them coming
+     * @param medianFirstWarningLeadDays median days from the first warning to the event
+     */
+    public record Warnings(
+            int warned,
+            int alerts,
+            int falseAlarms,
+            double recall,
+            double falseAlarmShare,
+            int eventsWarnedAny,
+            int eventsWarnedFirst,
+            int medianFirstWarningLeadDays) {}
+
+    /** A 95% interval from resampling companies with replacement. */
+    public record Interval(double low, double high) {}
 }

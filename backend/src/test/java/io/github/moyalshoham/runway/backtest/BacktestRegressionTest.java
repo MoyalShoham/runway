@@ -20,8 +20,12 @@ class BacktestRegressionTest {
             assertThat(h.maeRunway()).as("vs last-30-days at %d days", h.days()).isLessThan(h.maeRepeat());
         }
         BacktestReport.ShortfallMetrics minimum = r.shortfalls().get("minimum");
+        BacktestReport.Warnings runway = minimum.methods().get("runway");
         assertThat(minimum.realShortfalls()).isPositive();
-        assertThat(minimum.recallRunway()).isGreaterThan(minimum.recallRepeat());
-        assertThat(minimum.recallRunway()).isGreaterThanOrEqualTo(0.7);
+        assertThat(runway.recall())
+                .isGreaterThan(minimum.methods().get("lastThirtyDays").recall());
+        assertThat(runway.recall()).isGreaterThanOrEqualTo(0.7);
+        assertThat(runway.falseAlarmShare())
+                .isLessThan(minimum.methods().get("cushion").falseAlarmShare());
     }
 }

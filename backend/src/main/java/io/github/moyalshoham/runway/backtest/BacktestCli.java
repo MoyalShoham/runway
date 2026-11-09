@@ -16,7 +16,7 @@ import java.util.Map;
 /**
  * Runs the backtest and writes {@code <out>/results-<split>.json} and {@code .md}.
  *
- * <pre>./mvnw -q compile exec:java -Dexec.args="--split holdout --out ../eval"</pre>
+ * <pre>./mvnw -q compile exec:java -Dexec.args="--split holdout"</pre>
  */
 public final class BacktestCli {
 
@@ -24,7 +24,8 @@ public final class BacktestCli {
 
     public static void main(String[] args) throws IOException {
         String split = "dev";
-        Path out = Path.of("../eval");
+        // Written to target/ unless --out says otherwise, so a reproduction never overwrites eval/.
+        Path out = Path.of("target/eval");
         Integer paths = null;
         Double alertProbability = null;
         Double dispersion = null;
@@ -69,23 +70,28 @@ public final class BacktestCli {
                 dp,
                 ReportBuilder.horizons(results),
                 ReportBuilder.shortfalls(results),
+                ReportBuilder.confidence(results, BOOTSTRAP_ROUNDS, 7L),
                 ReportBuilder.byArchetype(results),
-                gitCommit(),
+                git("rev-parse", "--short", "HEAD"),
+                !git("status", "--porcelain", "--untracked-files=no").isEmpty(),
                 Math.round(seconds * 10) / 10.0);
     }
+
+    static final int BOOTSTRAP_ROUNDS = 1000;
 
     static String markdown(BacktestReport r) {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format(
                 Locale.ENGLISH,
-                "Split `%s`: %d companies, %d forecasts, %d paths, alert probability %.2f, dispersion %.2f, commit `%s`.%n%n",
+                "Split `%s`: %d companies, %d forecasts, %d paths, alert probability %.2f, dispersion %.2f, commit `%s`%s.%n%n",
                 r.split(),
                 r.seeds().size(),
                 r.forecasts(),
                 r.paths(),
                 r.alertProbability(),
                 r.dispersion(),
-                r.gitCommit()));
+                r.gitCommit(),
+                r.uncommittedChanges() ? " with uncommitted changes" : ""));
         sb.append(
                 "| Horizon | runway MAE (ILS) | Flat MAE | Last-30-days MAE | runway median AE | runway bias | runway MAE / monthly outflow | 10-90% band coverage |\n");
         sb.append("|---|---:|---:|---:|---:|---:|---:|---:|\n");
@@ -117,30 +123,41 @@ public final class BacktestCli {
                     ils(h.biasRunwayExFinancing()),
                     h.coverageExFinancing() * 100));
         }
-        sb.append(
-                "\n| Threshold | Real shortfalls | runway warned | runway false-alarm share | Last-30-days warned | Last-30-days false-alarm share | Median lead (days) |\n");
-        sb.append("|---|---:|---:|---:|---:|---:|---:|\n");
         for (Map.Entry<String, BacktestReport.ShortfallMetrics> e :
                 r.shortfalls().entrySet()) {
             BacktestReport.ShortfallMetrics s = e.getValue();
             sb.append(String.format(
                     Locale.ENGLISH,
-                    "| %s | %d of %d | %.0f%% (%d) | %.0f%% (%d of %d) | %.0f%% (%d) | %.0f%% (%d of %d) | %d |%n",
+                    "%nShortfalls below %s: %d events (distinct company and first day below), seen at %d of %d eligible cutoffs.%n%n",
                     e.getKey(),
+                    s.events(),
                     s.realShortfalls(),
-                    s.eligible(),
-                    s.recallRunway() * 100,
-                    s.warnedRunway(),
-                    s.falseAlarmShareRunway() * 100,
-                    s.falseAlarmsRunway(),
-                    s.alertsRunway(),
-                    s.recallRepeat() * 100,
-                    s.warnedRepeat(),
-                    s.falseAlarmShareRepeat() * 100,
-                    s.falseAlarmsRepeat(),
-                    s.alertsRepeat(),
-                    s.medianLeadDaysWarned()));
+                    s.eligible()));
+            sb.append(
+                    "| Method | Events warned at the first chance | Events warned at some cutoff | Median lead of first warning (days) | Cutoff-level recall | False-alarm share of alerts |\n");
+            sb.append("|---|---:|---:|---:|---:|---:|\n");
+            s.methods()
+                    .forEach((method, w) -> sb.append(String.format(
+                            Locale.ENGLISH,
+                            "| %s | %.0f%% (%d) | %.0f%% (%d) | %d | %.0f%% (%d of %d) | %.0f%% (%d of %d) |%n",
+                            method,
+                            pct(w.eventsWarnedFirst(), s.events()),
+                            w.eventsWarnedFirst(),
+                            pct(w.eventsWarnedAny(), s.events()),
+                            w.eventsWarnedAny(),
+                            w.medianFirstWarningLeadDays(),
+                            w.recall() * 100,
+                            w.warned(),
+                            s.realShortfalls(),
+                            w.falseAlarmShare() * 100,
+                            w.falseAlarms(),
+                            w.alerts())));
         }
+        sb.append(String.format(
+                Locale.ENGLISH, "%n95%% intervals (company bootstrap, %d rounds):%n%n", BOOTSTRAP_ROUNDS));
+        r.confidence95()
+                .forEach((k, v) -> sb.append(
+                        String.format(Locale.ENGLISH, "- %s: %.0f%% to %.0f%%%n", k, v.low() * 100, v.high() * 100)));
         sb.append("\n| Archetype | runway 30-day MAE | Flat | Last-30-days |\n|---|---:|---:|---:|\n");
         r.byArchetype()
                 .forEach((a, m) -> sb.append(String.format(
@@ -154,17 +171,23 @@ public final class BacktestCli {
         return sb.toString();
     }
 
+    private static double pct(int a, int b) {
+        return b == 0 ? 0 : 100.0 * a / b;
+    }
+
     private static String ils(BigDecimal v) {
         return String.format(Locale.ENGLISH, "%,.0f", v);
     }
 
-    private static String gitCommit() {
+    /** Output of a git command, or "unknown" if git is unavailable. */
+    private static String git(String... args) {
         try {
-            Process p = new ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-                    .redirectErrorStream(true)
-                    .start();
-            String sha = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-            return p.waitFor() == 0 ? sha : "unknown";
+            String[] cmd = new String[args.length + 1];
+            cmd[0] = "git";
+            System.arraycopy(args, 0, cmd, 1, args.length);
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+            return p.waitFor() == 0 ? out : "unknown";
         } catch (IOException e) {
             return "unknown";
         } catch (InterruptedException e) {

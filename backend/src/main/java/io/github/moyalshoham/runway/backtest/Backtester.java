@@ -33,7 +33,16 @@ public final class Backtester {
     public static final int MIN_LEAD_DAYS = 7;
 
     /** Per-threshold outcome at one cutoff. */
-    record Outcome(boolean eligible, int actualFirstBreach, boolean runwayAlert, boolean repeatAlert) {}
+    /**
+     * Per-threshold outcome at one cutoff.
+     *
+     * @param actualFirstBreach days until the actual balance first fell below the threshold, -1 if
+     *     it did not within the horizon
+     * @param cushionAlert the "one month of cushion" rule: alert when the balance is less than the
+     *     last 30 days' outflows above the threshold
+     */
+    record Outcome(
+            boolean eligible, int actualFirstBreach, boolean runwayAlert, boolean repeatAlert, boolean cushionAlert) {}
 
     /** Everything measured at one (company, cutoff). */
     record CutoffResult(
@@ -72,6 +81,7 @@ public final class Backtester {
             Forecast f = forecaster.forecast(s, settings);
             int base = index(c, cutoff);
             BigDecimal[] flat = Baselines.flat(s.balance(), horizon);
+            BigDecimal lastMonthOutflow = Baselines.outflowLast30Days(s.transactions(), cutoff);
             BigDecimal[] repeat = Baselines.lastThirtyDaysRepeated(s.balance(), s.transactions(), cutoff, horizon);
             BigDecimal[] actual = new BigDecimal[HORIZONS.length];
             BigDecimal[] p10 = new BigDecimal[HORIZONS.length];
@@ -101,9 +111,20 @@ public final class Backtester {
                             base,
                             horizon,
                             f,
-                            repeat));
+                            repeat,
+                            lastMonthOutflow));
             outcomes.put(
-                    "zero", outcome(Money.ZERO, Alert.Kind.BELOW_ZERO, s.balance(), daily, base, horizon, f, repeat));
+                    "zero",
+                    outcome(
+                            Money.ZERO,
+                            Alert.Kind.BELOW_ZERO,
+                            s.balance(),
+                            daily,
+                            base,
+                            horizon,
+                            f,
+                            repeat,
+                            lastMonthOutflow));
             results.add(new CutoffResult(
                     c.seed(),
                     c.archetype(),
@@ -129,7 +150,8 @@ public final class Backtester {
             int base,
             int horizon,
             Forecast f,
-            BigDecimal[] repeat) {
+            BigDecimal[] repeat,
+            BigDecimal lastMonthOutflow) {
         boolean eligible = balance.compareTo(threshold) >= 0;
         int first = -1;
         for (int h = 1; h <= horizon; h++) {
@@ -140,7 +162,8 @@ public final class Backtester {
         }
         boolean runwayAlert = f.alerts().stream().anyMatch(a -> a.kind() == kind);
         boolean repeatAlert = Arrays.stream(repeat).anyMatch(b -> b.compareTo(threshold) < 0);
-        return new Outcome(eligible, first, runwayAlert, repeatAlert);
+        boolean cushionAlert = balance.subtract(threshold).compareTo(lastMonthOutflow) < 0;
+        return new Outcome(eligible, first, runwayAlert, repeatAlert, cushionAlert);
     }
 
     /**

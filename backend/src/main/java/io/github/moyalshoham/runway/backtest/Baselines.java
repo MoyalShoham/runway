@@ -40,4 +40,16 @@ public final class Baselines {
         }
         return path;
     }
+
+    /** Total outflow over the 30 days up to {@code asOf}, as a positive amount (for the cushion rule). */
+    public static BigDecimal outflowLast30Days(List<BankTransaction> history, LocalDate asOf) {
+        BigDecimal out = Money.ZERO;
+        LocalDate from = asOf.minusDays(29);
+        for (BankTransaction t : history) {
+            if (t.amount().signum() < 0 && !t.date().isBefore(from) && !t.date().isAfter(asOf)) {
+                out = out.subtract(t.amount());
+            }
+        }
+        return out;
+    }
 }

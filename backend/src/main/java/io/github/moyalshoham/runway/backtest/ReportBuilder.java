@@ -77,68 +77,141 @@ final class ReportBuilder {
         return metrics;
     }
 
+    static final String[] METHODS = {"runway", "lastThirtyDays", "cushion"};
+
     static Map<String, BacktestReport.ShortfallMetrics> shortfalls(List<Backtester.CutoffResult> results) {
         Map<String, BacktestReport.ShortfallMetrics> out = new LinkedHashMap<>();
         for (String threshold : List.of("minimum", "zero")) {
             int eligible = 0;
             int real = 0;
-            int warned = 0;
-            int alerts = 0;
-            int falseAlarms = 0;
-            int warnedRepeat = 0;
-            int alertsRepeat = 0;
-            int falseRepeat = 0;
-            List<Integer> leads = new ArrayList<>();
+            // Event = (company, day the balance first fell below the threshold); cutoffs in date order.
+            Map<String, List<Backtester.CutoffResult>> events = new LinkedHashMap<>();
             for (Backtester.CutoffResult r : results) {
                 Backtester.Outcome o = r.outcomes().get(threshold);
                 if (!o.eligible()) {
                     continue;
                 }
                 eligible++;
-                boolean happened = o.actualFirstBreach() > 0;
-                boolean counted = o.actualFirstBreach() >= Backtester.MIN_LEAD_DAYS;
-                if (counted) {
+                if (o.actualFirstBreach() >= Backtester.MIN_LEAD_DAYS) {
                     real++;
-                    if (o.runwayAlert()) {
-                        warned++;
-                        leads.add(o.actualFirstBreach());
-                    }
-                    if (o.repeatAlert()) {
-                        warnedRepeat++;
-                    }
-                }
-                if (o.runwayAlert()) {
-                    alerts++;
-                    if (!happened) {
-                        falseAlarms++;
-                    }
-                }
-                if (o.repeatAlert()) {
-                    alertsRepeat++;
-                    if (!happened) {
-                        falseRepeat++;
-                    }
+                    String event = r.seed() + "@" + r.cutoff().plusDays(o.actualFirstBreach());
+                    events.computeIfAbsent(event, k -> new ArrayList<>()).add(r);
                 }
             }
-            leads.sort(Integer::compareTo);
-            out.put(
-                    threshold,
-                    new BacktestReport.ShortfallMetrics(
-                            eligible,
-                            real,
-                            warned,
-                            alerts,
-                            falseAlarms,
-                            ratio(warned, real),
-                            ratio(falseAlarms, alerts),
-                            warnedRepeat,
-                            alertsRepeat,
-                            falseRepeat,
-                            ratio(warnedRepeat, real),
-                            ratio(falseRepeat, alertsRepeat),
-                            leads.isEmpty() ? 0 : leads.get(leads.size() / 2)));
+            Map<String, BacktestReport.Warnings> methods = new LinkedHashMap<>();
+            for (String method : METHODS) {
+                int warned = 0;
+                int alerts = 0;
+                int falseAlarms = 0;
+                for (Backtester.CutoffResult r : results) {
+                    Backtester.Outcome o = r.outcomes().get(threshold);
+                    if (!o.eligible()) {
+                        continue;
+                    }
+                    boolean alert = alerted(o, method);
+                    if (o.actualFirstBreach() >= Backtester.MIN_LEAD_DAYS && alert) {
+                        warned++;
+                    }
+                    if (alert) {
+                        alerts++;
+                        if (o.actualFirstBreach() < 0) {
+                            falseAlarms++;
+                        }
+                    }
+                }
+                int any = 0;
+                int first = 0;
+                List<Integer> leads = new ArrayList<>();
+                for (List<Backtester.CutoffResult> cutoffs : events.values()) {
+                    cutoffs.sort(java.util.Comparator.comparing(Backtester.CutoffResult::cutoff));
+                    Backtester.CutoffResult earliest = cutoffs.getFirst();
+                    if (alerted(earliest.outcomes().get(threshold), method)) {
+                        first++;
+                    }
+                    for (Backtester.CutoffResult c : cutoffs) {
+                        Backtester.Outcome o = c.outcomes().get(threshold);
+                        if (alerted(o, method)) {
+                            any++;
+                            leads.add(o.actualFirstBreach());
+                            break;
+                        }
+                    }
+                }
+                leads.sort(Integer::compareTo);
+                methods.put(
+                        method,
+                        new BacktestReport.Warnings(
+                                warned,
+                                alerts,
+                                falseAlarms,
+                                ratio(warned, real),
+                                ratio(falseAlarms, alerts),
+                                any,
+                                first,
+                                leads.isEmpty() ? 0 : leads.get((leads.size() - 1) / 2)));
+            }
+            out.put(threshold, new BacktestReport.ShortfallMetrics(eligible, real, events.size(), methods));
         }
         return out;
+    }
+
+    static boolean alerted(Backtester.Outcome o, String method) {
+        return switch (method) {
+            case "runway" -> o.runwayAlert();
+            case "lastThirtyDays" -> o.repeatAlert();
+            case "cushion" -> o.cushionAlert();
+            default -> throw new IllegalArgumentException(method);
+        };
+    }
+
+    /**
+     * 95% intervals for the headline numbers, resampling whole companies with replacement (cutoffs of
+     * one company are not independent, so resampling cutoffs would understate the uncertainty).
+     */
+    static Map<String, BacktestReport.Interval> confidence(
+            List<Backtester.CutoffResult> results, int rounds, long seed) {
+        Map<Long, List<Backtester.CutoffResult>> byCompany = new LinkedHashMap<>();
+        for (Backtester.CutoffResult r : results) {
+            byCompany.computeIfAbsent(r.seed(), k -> new ArrayList<>()).add(r);
+        }
+        List<List<Backtester.CutoffResult>> companies = new ArrayList<>(byCompany.values());
+        java.util.SplittableRandom rng = new java.util.SplittableRandom(seed);
+        Map<String, List<Double>> samples = new LinkedHashMap<>();
+        for (int b = 0; b < rounds; b++) {
+            List<Backtester.CutoffResult> sample = new ArrayList<>();
+            for (int i = 0; i < companies.size(); i++) {
+                sample.addAll(companies.get(rng.nextInt(companies.size())));
+            }
+            List<BacktestReport.HorizonMetrics> h = horizons(sample);
+            BacktestReport.ShortfallMetrics m = shortfalls(sample).get("minimum");
+            BacktestReport.Warnings w = m.methods().get("runway");
+            add(
+                    samples,
+                    "mae30ReductionVsFlat",
+                    1 - h.get(1).maeRunway().doubleValue() / h.get(1).maeFlat().doubleValue());
+            add(
+                    samples,
+                    "mae90ReductionVsFlat",
+                    1 - h.get(2).maeRunway().doubleValue() / h.get(2).maeFlat().doubleValue());
+            add(samples, "coverage90", h.get(2).coverage());
+            add(samples, "minimumRecall", w.recall());
+            add(samples, "minimumFalseAlarmShare", w.falseAlarmShare());
+            add(samples, "minimumEventsWarnedFirst", ratio(w.eventsWarnedFirst(), m.events()));
+        }
+        Map<String, BacktestReport.Interval> out = new LinkedHashMap<>();
+        samples.forEach((k, v) -> {
+            List<Double> sorted = v.stream().sorted().toList();
+            out.put(
+                    k,
+                    new BacktestReport.Interval(
+                            sorted.get((int) Math.floor(0.025 * (sorted.size() - 1))),
+                            sorted.get((int) Math.ceil(0.975 * (sorted.size() - 1)))));
+        });
+        return out;
+    }
+
+    private static void add(Map<String, List<Double>> samples, String key, double value) {
+        samples.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
     }
 
     static Map<String, Map<String, BigDecimal>> byArchetype(List<Backtester.CutoffResult> results) {
